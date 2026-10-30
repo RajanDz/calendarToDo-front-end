@@ -1,0 +1,251 @@
+@import "tailwindcss";
+
+* { box-sizing: border-box; }
+
+body {
+  background-color: #0f0f13;
+  color: #f1f1f5;
+  font-family: 'Inter', system-ui, sans-serif;
+  margin: 0;
+}
+
+#root { width: 100%; min-height: 100vh; }
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #1a1a24; }
+::-webkit-scrollbar-thumb { background: #2a2a3a; border-radius: 3px; }
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   FULLCALENDAR — complete dark theme
+   ═══════════════════════════════════════════════════════════════════ */
+
+:root {
+  --fc-border-color:         #2a2a3a;
+  --fc-page-bg-color:        transparent;
+  --fc-neutral-bg-color:     #22222f;
+  --fc-today-bg-color:       rgba(99,102,241,0.07);
+  --fc-event-bg-color:       #6366f1;
+  --fc-event-border-color:   transparent;
+  --fc-event-text-color:     #ffffff;
+  --fc-highlight-color:      rgba(99,102,241,0.12);
+  --fc-non-business-color:   rgba(0,0,0,0.10);
+}
+
+/* ── Wipe all FC backgrounds so our dark bg shows ─────────────── */
+.fc,
+.fc-view-harness,
+.fc-view,
+.fc-daygrid,
+.fc-timegrid,
+.fc-scroller,
+.fc-scroller-liquid,
+.fc-scroller-liquid-absolute {
+  background: transparent !important;
+}
+
+/* ══ TOOLBAR ════════════════════════════════════════════════════════ */
+
+.fc .fc-header-toolbar {
+  display:         flex !important;
+  flex-direction:  row !important;
+  align-items:     center !important;
+  justify-content: space-between !important;
+  flex-wrap:       nowrap !important;
+  padding:         0 0 16px 0 !important;
+  margin-bottom:   0 !important;
+}
+
+.fc .fc-toolbar-chunk {
+  display:        flex !important;
+  flex-direction: row !important;
+  align-items:    center !important;
+  gap:            6px !important;
+  flex-shrink:    0 !important;
+}
+
+.fc .fc-button-group {
+  display:        flex !important;
+  flex-direction: row !important;
+  gap:            0 !important;
+}
+
+.fc .fc-button,
+.fc .fc-button-primary {
+  display:         inline-flex !important;
+  align-items:     center !important;
+  justify-content: center !important;
+  height:          32px !important;
+  padding:         0 12px !important;
+  margin:          0 !important;
+  background:      #22222f !important;
+  border:          1px solid #2a2a3a !important;
+  color:           #c9cdd4 !important;
+  border-radius:   8px !important;
+  font-size:       0.78rem !important;
+  font-weight:     500 !important;
+  line-height:     1 !important;
+  white-space:     nowrap !important;
+  cursor:          pointer !important;
+  box-shadow:      none !important;
+  text-transform:  capitalize !important;
+  transition:      background 0.15s, border-color 0.15s, color 0.15s !important;
+  -webkit-appearance: none !important;
+}
+
+.fc .fc-button:hover,
+.fc .fc-button-primary:hover:not(:disabled) {
+  background:    #6366f1 !important;
+  border-color:  #6366f1 !important;
+  color:         #fff !important;
+}
+
+.fc .fc-button:focus { outline: none !important; box-shadow: 0 0 0 2px rgba(99,102,241,0.4) !important; }
+.fc .fc-button:disabled { opacity: 0.35 !important; cursor: default !important; }
+
+.fc .fc-button-group .fc-button              { border-radius: 0 !important; border-right-width: 0 !important; }
+.fc .fc-button-group .fc-button:first-child  { border-radius: 8px 0 0 8px !important; }
+.fc .fc-button-group .fc-button:last-child   { border-radius: 0 8px 8px 0 !important; border-right-width: 1px !important; }
+
+.fc .fc-toolbar-title {
+  font-size:   1rem !important;
+  font-weight: 600 !important;
+  color:       #f1f1f5 !important;
+  margin:      0 !important;
+  white-space: nowrap !important;
+}
+
+/* ══ SCROLLGRID BORDERS ═════════════════════════════════════════════ */
+
+.fc-theme-standard .fc-scrollgrid         { border-color: #2a2a3a !important; }
+.fc-theme-standard td, .fc-theme-standard th { border-color: #2a2a3a !important; }
+
+/* ══ COLUMN HEADERS (day names row) ════════════════════════════════ */
+
+.fc .fc-col-header-cell {
+  background: #1e1e2c !important;
+  border-color: #2a2a3a !important;
+}
+
+.fc .fc-col-header-cell-cushion {
+  display:         inline-block !important;
+  padding:         9px 4px !important;
+  color:           #6b7280 !important;
+  font-size:       0.7rem !important;
+  font-weight:     600 !important;
+  text-transform:  uppercase !important;
+  letter-spacing:  0.07em !important;
+  text-decoration: none !important;
+}
+
+.fc .fc-col-header-cell.fc-day-today .fc-col-header-cell-cushion {
+  color: #818cf8 !important;
+}
+
+/* ══ DAYGRID — MONTH VIEW ═══════════════════════════════════════════ */
+
+.fc .fc-daygrid-day                         { background: transparent !important; }
+.fc .fc-daygrid-day.fc-day-today            { background: rgba(99,102,241,0.07) !important; }
+.fc .fc-daygrid-day.fc-day-other            { background: rgba(0,0,0,0.12) !important; }
+.fc .fc-daygrid-day.fc-day-other .fc-daygrid-day-number { color: #374151 !important; }
+
+.fc .fc-daygrid-day-number {
+  padding:         6px 8px !important;
+  color:           #9ca3af !important;
+  font-size:       0.78rem !important;
+  text-decoration: none !important;
+  line-height:     1 !important;
+}
+
+.fc .fc-day-today .fc-daygrid-day-number {
+  background:    #6366f1 !important;
+  color:         #fff !important;
+  border-radius: 50% !important;
+  width:         26px !important;
+  height:        26px !important;
+  display:       flex !important;
+  align-items:   center !important;
+  justify-content: center !important;
+  margin:        4px !important;
+  padding:       0 !important;
+}
+
+/* daygrid event pill */
+.fc .fc-daygrid-event-harness { margin: 1px 4px !important; }
+
+.fc .fc-daygrid-event {
+  border-radius: 4px !important;
+  padding:       2px 6px !important;
+  font-size:     0.72rem !important;
+  font-weight:   500 !important;
+  border:        none !important;
+  color:         #fff !important;
+  white-space:   nowrap !important;
+  overflow:      hidden !important;
+}
+
+/* ══ EVENTS — force background regardless of inline style ══════════ */
+
+.fc a[class*="fc-event"],
+.fc div[class*="fc-event"],
+.fc .fc-event,
+.fc .fc-daygrid-event,
+.fc .fc-timegrid-event,
+.fc .fc-v-event,
+.fc .fc-h-event {
+  background-color: #6366f1 !important;
+  border:           none !important;
+  color:            #fff !important;
+}
+
+.fc .fc-event-main             { color: #fff !important; padding: 0 !important; }
+.fc .fc-event-main-frame       { gap: 2px !important; }
+.fc .fc-event-title            { color: #fff !important; font-weight: 500 !important; font-size: 0.73rem !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fc .fc-event-time             { color: rgba(255,255,255,0.78) !important; font-size: 0.68rem !important; white-space: nowrap !important; }
+
+/* ══ TIMEGRID EVENT BLOCK ═══════════════════════════════════════════ */
+
+.fc .fc-v-event {
+  border-left:  3px solid rgba(255,255,255,0.22) !important;
+  border-radius: 6px !important;
+  box-shadow:   0 2px 10px rgba(0,0,0,0.45) !important;
+  overflow:     hidden !important;
+}
+
+.fc .fc-timegrid-event-harness-inset .fc-timegrid-event {
+  box-shadow: 0 2px 10px rgba(0,0,0,0.45) !important;
+}
+
+.fc .fc-timegrid-event .fc-event-main {
+  padding: 4px 6px !important;
+}
+
+/* ══ TIME GRID SLOTS ════════════════════════════════════════════════ */
+
+.fc .fc-timegrid-slot        { height: 48px !important; }
+.fc .fc-timegrid-slot-lane   { border-bottom: 1px solid #2a2a3a !important; }
+.fc .fc-timegrid-slot-minor  { border-top:    1px solid #1f1f2e !important; }
+
+.fc .fc-timegrid-slot-label  { vertical-align: top !important; }
+
+.fc .fc-timegrid-slot-label-cushion {
+  color:       #4b5563 !important;
+  font-size:   0.7rem !important;
+  font-weight: 500 !important;
+  padding:     5px 10px 0 0 !important;
+  white-space: nowrap !important;
+}
+
+.fc .fc-timegrid-col.fc-day-today    { background: rgba(99,102,241,0.04) !important; }
+.fc .fc-timegrid-col-bg              { background: transparent !important; }
+
+/* ── Now indicator ─────────────────────────────────────────────── */
+.fc .fc-timegrid-now-indicator-line {
+  border-top:   2px solid #6366f1 !important;
+  margin-left:  0 !important;
+}
+.fc .fc-timegrid-now-indicator-arrow {
+  border-left-color:   #6366f1 !important;
+  border-top-color:    transparent !important;
+  border-bottom-color: transparent !important;
+}
