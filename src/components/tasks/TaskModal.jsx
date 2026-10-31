@@ -1,143 +1,234 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { X } from 'lucide-react'
 
-export default function TaskModal({ open, onClose, onSubmit, defaultValues, title }) {
-  const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm()
+const COLORS = {
+  indigo:  { dot: '#7C7AFF', ring: '#6461F5' },
+  emerald: { dot: '#34D399', ring: '#10b981' },
+  amber:   { dot: '#F5B83D', ring: '#f59e0b' },
+  rose:    { dot: '#FB7199', ring: '#fb7185' },
+  sky:     { dot: '#38BDF8', ring: '#0ea5e9' },
+}
+const COLOR_KEYS = Object.keys(COLORS)
+
+const S = {
+  backdrop: {
+    position: 'fixed', inset: 0, zIndex: 200,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    background: 'rgba(5,5,10,.6)',
+    backdropFilter: 'blur(4px)',
+    WebkitBackdropFilter: 'blur(4px)',
+  },
+  card: {
+    position: 'relative',
+    background: '#14141C', borderRadius: 18,
+    border: '1px solid #262633',
+    boxShadow: '0 24px 80px rgba(0,0,0,0.7)',
+    width: '100%', maxWidth: 420,
+    margin: '0 16px',
+    padding: 24,
+  },
+  header: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    marginBottom: 20,
+  },
+  title: { fontSize: 16, fontWeight: 600, color: '#ECECF1' },
+  closeBtn: {
+    width: 30, height: 30, borderRadius: 8, border: 'none',
+    background: 'transparent', color: '#6F6F82',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    cursor: 'pointer', transition: 'background 0.15s',
+  },
+  label: { display: 'block', fontSize: 11, color: '#6F6F82', marginBottom: 6 },
+  input: {
+    width: '100%', height: 44, padding: '0 12px',
+    background: '#1C1C28', border: '1px solid #262633',
+    borderRadius: 10, color: '#ECECF1', fontSize: 14,
+    outline: 'none', fontFamily: 'inherit',
+    transition: 'border-color 0.15s',
+  },
+  smallInput: {
+    width: '100%', height: 36, padding: '0 10px',
+    background: '#1C1C28', border: '1px solid #262633',
+    borderRadius: 10, color: '#ECECF1', fontSize: 13,
+    outline: 'none', fontFamily: 'inherit',
+    transition: 'border-color 0.15s',
+  },
+  row: { display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr', gap: 10, marginBottom: 16 },
+  swatches: { display: 'flex', gap: 10, alignItems: 'center' },
+  cancelBtn: {
+    flex: 1, height: 38, borderRadius: 10,
+    border: '1px solid #262633', background: 'transparent',
+    color: '#8B8B9E', fontSize: 14, fontWeight: 500,
+    cursor: 'pointer', fontFamily: 'inherit',
+    transition: 'background 0.15s',
+  },
+  saveBtn: (disabled) => ({
+    flex: 1, height: 38, borderRadius: 10,
+    border: 'none', background: '#6461F5',
+    boxShadow: 'inset 0 0 0 1px #7B78FF, 0 0 0 0 transparent',
+    color: '#fff', fontSize: 14, fontWeight: 600,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    fontFamily: 'inherit',
+    opacity: disabled ? 0.5 : 1,
+    transition: 'opacity 0.15s, background 0.15s',
+  }),
+}
+
+export default function TaskModal({ open, onClose, onSubmit, defaultValues, modalTitle = 'New task' }) {
+  const { register, handleSubmit, reset, watch, setValue, formState: { isSubmitting } } = useForm()
+  const [color, setColor] = useState(defaultValues?.color || 'indigo')
+  const title = watch('name', '')
 
   useEffect(() => {
     if (open) {
+      const today = new Date().toISOString().slice(0, 10)
+      const nowH = new Date().getHours()
+      const startTime = `${String(nowH).padStart(2,'0')}:00`
+      const endTime = `${String((nowH + 1) % 24).padStart(2,'0')}:00`
+
       reset(defaultValues ?? {
         name: '',
-        description: '',
-        dateOfStart: '',
-        timeOfStart: '',
-        dateOfEnd: '',
-        timeOfEnd: '',
-        status: 'pending',
+        date: today,
+        timeOfStart: startTime,
+        timeOfEnd: endTime,
         repeated: false,
-        repeatUntil: '',
       })
+      setColor(defaultValues?.color || 'indigo')
     }
   }, [open, defaultValues, reset])
 
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose()
+    }
+    if (open) window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onClose])
+
   if (!open) return null
 
-  const isEdit = !!defaultValues
+  const isEdit = !!defaultValues?.name
 
   const submit = async (data) => {
-    await onSubmit(data)
-    onClose()
+    const date = data.date
+    let endTime = data.timeOfEnd
+    if (endTime <= data.timeOfStart) {
+      const [h, m] = data.timeOfStart.split(':').map(Number)
+      const endMin = (h * 60 + m + 60) % (24 * 60)
+      endTime = `${String(Math.floor(endMin / 60)).padStart(2,'0')}:${String(endMin % 60).padStart(2,'0')}`
+    }
+    await onSubmit({
+      ...data,
+      dateOfStart: date,
+      dateOfEnd: date,
+      timeOfStart: data.timeOfStart,
+      timeOfEnd: endTime,
+      status: defaultValues?.status || 'pending',
+      color,
+    })
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-[#1a1a24] border border-[#2a2a3a] rounded-2xl w-full max-w-md mx-4 p-6 shadow-2xl">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-lg font-semibold text-[#f1f1f5]">{title}</h2>
-          <button onClick={onClose} className="p-1.5 rounded-lg text-[#6b7280] hover:bg-[#22222f] transition-colors">
-            <X size={18} />
+    <div style={S.backdrop} onClick={onClose}>
+      <div style={S.card} onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={modalTitle}>
+        <div style={S.header}>
+          <span style={S.title}>{modalTitle}</span>
+          <button style={S.closeBtn} onClick={onClose} aria-label="Close"
+            onMouseEnter={e => e.currentTarget.style.background = '#1B1B25'}
+            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+          >
+            <X size={16} />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit(submit)} className="flex flex-col gap-4">
-          <div>
-            <label className="block text-xs text-[#6b7280] mb-1.5">Task name *</label>
+        <form onSubmit={handleSubmit(submit)}>
+          {/* Task name */}
+          <div style={{ marginBottom: 16 }}>
+            <label style={S.label}>Task name</label>
             <input
-              {...register('name', { required: 'Name is required' })}
-              className="w-full bg-[#22222f] border border-[#2a2a3a] rounded-lg px-3 py-2 text-sm text-[#f1f1f5] outline-none focus:border-indigo-500 transition-colors"
+              {...register('name', { required: true })}
               placeholder="e.g. Team standup"
-            />
-            {errors.name && <p className="text-xs text-red-400 mt-1">{errors.name.message}</p>}
-          </div>
-
-          <div>
-            <label className="block text-xs text-[#6b7280] mb-1.5">Description</label>
-            <textarea
-              {...register('description')}
-              rows={2}
-              className="w-full bg-[#22222f] border border-[#2a2a3a] rounded-lg px-3 py-2 text-sm text-[#f1f1f5] outline-none focus:border-indigo-500 transition-colors resize-none"
-              placeholder="Optional notes..."
+              style={S.input}
+              onFocus={e => e.currentTarget.style.borderColor = '#6461F5'}
+              onBlur={e => e.currentTarget.style.borderColor = '#262633'}
+              autoFocus
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          {/* Date / Start / End */}
+          <div style={S.row}>
             <div>
-              <label className="block text-xs text-[#6b7280] mb-1.5">Start date *</label>
-              <input
-                type="date"
-                {...register('dateOfStart', { required: true })}
-                className="w-full bg-[#22222f] border border-[#2a2a3a] rounded-lg px-3 py-2 text-sm text-[#f1f1f5] outline-none focus:border-indigo-500 transition-colors"
+              <label style={S.label}>Date</label>
+              <input type="date" {...register('date', { required: true })} style={S.smallInput}
+                onFocus={e => e.currentTarget.style.borderColor = '#6461F5'}
+                onBlur={e => e.currentTarget.style.borderColor = '#262633'}
               />
             </div>
             <div>
-              <label className="block text-xs text-[#6b7280] mb-1.5">Start time *</label>
-              <input
-                type="time"
-                {...register('timeOfStart', { required: true })}
-                className="w-full bg-[#22222f] border border-[#2a2a3a] rounded-lg px-3 py-2 text-sm text-[#f1f1f5] outline-none focus:border-indigo-500 transition-colors"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs text-[#6b7280] mb-1.5">End date *</label>
-              <input
-                type="date"
-                {...register('dateOfEnd', { required: true })}
-                className="w-full bg-[#22222f] border border-[#2a2a3a] rounded-lg px-3 py-2 text-sm text-[#f1f1f5] outline-none focus:border-indigo-500 transition-colors"
+              <label style={S.label}>Start</label>
+              <input type="time" {...register('timeOfStart', { required: true })} style={S.smallInput}
+                onFocus={e => e.currentTarget.style.borderColor = '#6461F5'}
+                onBlur={e => e.currentTarget.style.borderColor = '#262633'}
               />
             </div>
             <div>
-              <label className="block text-xs text-[#6b7280] mb-1.5">End time *</label>
-              <input
-                type="time"
-                {...register('timeOfEnd', { required: true })}
-                className="w-full bg-[#22222f] border border-[#2a2a3a] rounded-lg px-3 py-2 text-sm text-[#f1f1f5] outline-none focus:border-indigo-500 transition-colors"
+              <label style={S.label}>End</label>
+              <input type="time" {...register('timeOfEnd', { required: true })} style={S.smallInput}
+                onFocus={e => e.currentTarget.style.borderColor = '#6461F5'}
+                onBlur={e => e.currentTarget.style.borderColor = '#262633'}
               />
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs text-[#6b7280] mb-1.5">Status</label>
-            <select
-              {...register('status')}
-              className="w-full bg-[#22222f] border border-[#2a2a3a] rounded-lg px-3 py-2 text-sm text-[#f1f1f5] outline-none focus:border-indigo-500 transition-colors"
-            >
-              <option value="pending">Pending</option>
-              <option value="in progress">In Progress</option>
-              <option value="done">Done</option>
-            </select>
+          {/* Color swatches */}
+          <div style={{ marginBottom: 20 }}>
+            <label style={S.label}>Color</label>
+            <div style={S.swatches}>
+              {COLOR_KEYS.map(key => {
+                const c = COLORS[key]
+                const active = color === key
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setColor(key)}
+                    aria-label={key}
+                    style={{
+                      width: 22, height: 22, borderRadius: '50%',
+                      background: c.dot,
+                      border: 'none', cursor: 'pointer', padding: 0,
+                      outline: active ? `2px solid ${c.ring}` : 'none',
+                      outlineOffset: active ? 3 : 0,
+                      boxShadow: active ? `0 0 0 5px #14141C` : 'none',
+                      transition: 'outline 0.1s, box-shadow 0.1s',
+                    }}
+                  />
+                )
+              })}
+            </div>
           </div>
 
+          {/* Repeat (create only) */}
           {!isEdit && (
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="repeated"
-                {...register('repeated')}
-                className="w-4 h-4 rounded accent-indigo-500"
-              />
-              <label htmlFor="repeated" className="text-sm text-[#9ca3af]">Repeat weekly</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20 }}>
+              <input type="checkbox" id="repeated" {...register('repeated')}
+                style={{ width: 16, height: 16, accentColor: '#6461F5', cursor: 'pointer' }} />
+              <label htmlFor="repeated" style={{ fontSize: 13, color: '#8B8B9E', cursor: 'pointer' }}>Repeat weekly</label>
             </div>
           )}
 
-          <div className="flex gap-3 mt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex-1 py-2 rounded-lg border border-[#2a2a3a] text-sm text-[#9ca3af] hover:bg-[#22222f] transition-colors"
+          {/* Actions */}
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button type="button" style={S.cancelBtn} onClick={onClose}
+              onMouseEnter={e => e.currentTarget.style.background = '#16161F'}
+              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+            >Cancel</button>
+            <button type="submit" disabled={isSubmitting || !title.trim()} style={S.saveBtn(isSubmitting || !title.trim())}
+              onMouseEnter={e => { if (!isSubmitting && title.trim()) e.currentTarget.style.background = '#7270FF' }}
+              onMouseLeave={e => e.currentTarget.style.background = '#6461F5'}
             >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="flex-1 py-2 rounded-lg bg-indigo-500 hover:bg-indigo-600 text-sm font-medium text-white transition-colors disabled:opacity-50"
-            >
-              {isSubmitting ? 'Saving...' : isEdit ? 'Save changes' : 'Create task'}
+              {isSubmitting ? 'Saving…' : isEdit ? 'Save changes' : 'Save task'}
             </button>
           </div>
         </form>

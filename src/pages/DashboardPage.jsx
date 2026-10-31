@@ -67,12 +67,12 @@ export default function DashboardPage() {
   const handleCreate = async (data) => {
     const payload = {
       name: data.name,
-      description: data.description || '',
-      dateOfStart: data.dateOfStart,
+      description: '',
+      dateOfStart: data.dateOfStart || data.date,
       timeOfStart: data.timeOfStart,
-      dateOfEnd: data.repeated ? data.repeatUntil || data.dateOfEnd : data.dateOfEnd,
+      dateOfEnd: data.dateOfEnd || data.date,
       timeOfEnd: data.timeOfEnd,
-      status: data.status,
+      status: 'pending',
     }
     await createMutation.mutateAsync({ data: payload, repeated: data.repeated })
   }
@@ -81,12 +81,12 @@ export default function DashboardPage() {
     await editMutation.mutateAsync({
       taskId: editingTask.id,
       name: data.name,
-      description: data.description,
-      dateOfStart: data.dateOfStart,
+      description: editingTask.description || '',
+      dateOfStart: data.dateOfStart || data.date,
       timeOfStart: data.timeOfStart,
-      dateOfEnd: data.dateOfEnd,
+      dateOfEnd: data.dateOfEnd || data.date,
       timeOfEnd: data.timeOfEnd,
-      status: data.status,
+      status: editingTask.status,
     })
     setEditingTask(null)
   }
@@ -110,7 +110,7 @@ export default function DashboardPage() {
   }, {})
 
   return (
-    <div className="max-w-4xl mx-auto">
+    <div className="max-w-4xl mx-auto p-8">
       <div className="mb-8">
         <h1 className="text-2xl font-semibold text-[#f1f1f5]">
           {greeting()}, {user?.firstname} 👋
@@ -224,20 +224,18 @@ export default function DashboardPage() {
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         onSubmit={handleCreate}
-        title="New task"
+        modalTitle="New task"
       />
 
       <TaskModal
         open={!!editingTask}
         onClose={() => setEditingTask(null)}
         onSubmit={handleEdit}
-        title="Edit task"
+        modalTitle="Edit task"
         defaultValues={editingTask ? {
           name: editingTask.name,
-          description: editingTask.description,
-          dateOfStart: editingTask.dateOfStart,
+          date: editingTask.dateOfStart,
           timeOfStart: editingTask.timeOfStart?.substring(0, 5),
-          dateOfEnd: editingTask.dateOfEnd,
           timeOfEnd: editingTask.timeOfEnd?.substring(0, 5),
           status: editingTask.status,
         } : null}

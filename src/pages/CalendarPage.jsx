@@ -1,71 +1,502 @@
-import { useState, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import FullCalendar from '@fullcalendar/react'
-import dayGridPlugin from '@fullcalendar/react/daygrid'
-import timeGridPlugin from '@fullcalendar/react/timegrid'
-import interactionPlugin from '@fullcalendar/react/interaction'
-import { format, parseISO } from 'date-fns'
 import {
-  getAllTasks,
-  getTasksByDate,
-  deleteTask,
-  editTask,
-  createTask,
-  createRepeatedTask,
-} from '../api/tasks'
-import TaskCard from '../components/tasks/TaskCard'
+  format, startOfWeek, endOfWeek, startOfMonth,
+  eachDayOfInterval, addDays, addWeeks, addMonths, subWeeks, subMonths,
+  isSameDay, isSameMonth, isToday,
+} from 'date-fns'
+import { ChevronLeft, ChevronRight, Plus } from 'lucide-react'
+import { getAllTasks, createTask, editTask, createRepeatedTask } from '../api/tasks'
 import TaskModal from '../components/tasks/TaskModal'
-import TaskPopover from '../components/tasks/TaskPopover'
 import { useAuth } from '../context/AuthContext'
-import { Plus, LayoutGrid, Columns2, CalendarDays } from 'lucide-react'
 
-const VIEWS = [
-  { key: 'dayGridMonth', label: 'Month', icon: LayoutGrid },
-  { key: 'timeGridWeek', label: 'Week', icon: Columns2 },
-  { key: 'timeGridDay', label: 'Day', icon: CalendarDays },
-]
+// ─── Design tokens ──────────────────────────────────────────────────────────
+const ROW_H = 56      // px per hour
+const GUTTER = 60     // px for time-label gutter
+const WK_START = 0    // 0 = Sunday
 
-const statusColors = {
-  done: '#10b981',
-  'in progress': '#f59e0b',
-  pending: '#6366f1',
+const PALETTE = {
+  indigo:  { bg: '#1F1E44', border: '#34327A', text: '#CFCEFF', dot: '#7C7AFF' },
+  emerald: { bg: '#102B24', border: '#1D5040', text: '#A6ECD0', dot: '#34D399' },
+  amber:   { bg: '#2E2410', border: '#584418', text: '#F7D999', dot: '#F5B83D' },
+  rose:    { bg: '#341624', border: '#5E2539', text: '#FFBFD0', dot: '#FB7199' },
+  sky:     { bg: '#0E2836', border: '#1A4860', text: '#B0E2FA', dot: '#38BDF8' },
 }
 
+// ─── Utility ────────────────────────────────────────────────────────────────
+function parseMin(t = '00:00') {
+  const [h, m] = t.substring(0, 5).split(':').map(Number)
+  return (h || 0) * 60 + (m || 0)
+}
+
+function minsToTime(mins) {
+  const h = Math.floor(mins / 60) % 24
+  const m = mins % 60
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+
+function loadColors() {
+  try { return JSON.parse(localStorage.getItem('calTaskColors') || '{}') }
+  catch { return {} }
+}
+
+function toEvent(task, colors) {
+  return {
+    id: String(task.id),
+    rawId: task.id,
+    title: task.name,
+    date: task.dateOfStart,
+    start: task.timeOfStart?.substring(0, 5) || '00:00',
+    end:   task.timeOfEnd?.substring(0, 5)   || '01:00',
+    color: colors[String(task.id)] || 'indigo',
+    done:  task.status === 'done',
+    raw:   task,
+  }
+}
+
+function getWeekDays(date) {
+  const ws = startOfWeek(date, { weekStartsOn: WK_START })
+  return Array.from({ length: 7 }, (_, i) => addDays(ws, i))
+}
+
+function headerTitle(view, date) {
+  if (view === 'month') return format(date, 'MMMM yyyy')
+  if (view === 'day')   return format(date, 'EEEE, MMMM d, yyyy')
+  const ws = startOfWeek(date, { weekStartsOn: WK_START })
+  const we = endOfWeek(date,   { weekStartsOn: WK_START })
+  if (format(ws, 'MMM yyyy') === format(we, 'MMM yyyy'))
+    return `${format(ws, 'MMM d')} – ${format(we, 'd, yyyy')}`
+  return `${format(ws, 'MMM d')} – ${format(we, 'MMM d, yyyy')}`
+}
+
+// ─── EventBlock (time-grid) ──────────────────────────────────────────────────
+function EventBlock({ ev, onClick }) {
+  const c = PALETTE[ev.color] || PALETTE.indigo
+  const startMin = parseMin(ev.start)
+  const endMin   = parseMin(ev.end)
+  const durMin   = Math.max(endMin - startMin, 20)
+  const top    = (startMin / 60) * ROW_H + 2
+  const height = Math.max((durMin / 60) * ROW_H - 4, (20 / 60) * ROW_H)
+
+  return (
+    <div
+      onClick={e => { e.stopPropagation(); onClick(ev) }}
+      style={{
+        position: 'absolute', top, left: 4, right: 4, height,
+        background: c.bg, border: `1px solid ${c.border}`,
+        borderRadius: 8, padding: '6px 8px',
+        cursor: 'pointer', opacity: ev.done ? 0.45 : 1,
+        zIndex: 1, overflow: 'hidden',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 2 }}>
+        <div style={{ width: 6, height: 6, borderRadius: '50%', background: c.dot, flexShrink: 0 }} />
+        <span style={{
+          color: c.text, fontSize: 12.5, fontWeight: 600,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          textDecoration: ev.done ? 'line-through' : 'none',
+        }}>{ev.title}</span>
+      </div>
+      {height > 34 && (
+        <div style={{ color: c.text, opacity: 0.7, fontSize: 11, fontFamily: 'Geist Mono, monospace' }}>
+          {ev.start} – {ev.end}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── TimeGrid (Week / Day) ───────────────────────────────────────────────────
+function TimeGrid({ days, events, onSlotClick, onEventClick, onDayHeaderClick }) {
+  const scrollRef = useRef(null)
+  const [nowMin, setNowMin] = useState(() => {
+    const n = new Date(); return n.getHours() * 60 + n.getMinutes()
+  })
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 7.5 * ROW_H
+  }, [days.length])
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      const n = new Date(); setNowMin(n.getHours() * 60 + n.getMinutes())
+    }, 60_000)
+    return () => clearInterval(t)
+  }, [])
+
+  const hours    = Array.from({ length: 24 }, (_, i) => i)
+  const nowTop   = (nowMin / 60) * ROW_H
+  const todayStr = format(new Date(), 'yyyy-MM-dd')
+  const isWeek   = days.length > 1
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* Column headers */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: `${GUTTER}px repeat(${days.length}, minmax(0,1fr))`,
+        borderBottom: '1px solid #1A1A24', flexShrink: 0,
+      }}>
+        <div />
+        {days.map(day => {
+          const isTdy = isToday(day)
+          const dayStr = format(day, 'yyyy-MM-dd')
+          return (
+            <div
+              key={dayStr}
+              onClick={() => isWeek && onDayHeaderClick(day)}
+              style={{
+                padding: '10px 0', textAlign: 'center',
+                borderLeft: '1px solid #1A1A24',
+                cursor: isWeek ? 'pointer' : 'default',
+              }}
+            >
+              <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: '0.06em', color: '#5C5C70', textTransform: 'uppercase', marginBottom: 4 }}>
+                {format(day, 'EEE')}
+              </div>
+              <div style={{
+                width: 28, height: 28, borderRadius: 6, margin: '0 auto',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: isTdy ? '#6461F5' : 'transparent',
+                color: isTdy ? '#fff' : '#ECECF1',
+                fontSize: 14, fontWeight: 600,
+              }}>
+                {format(day, 'd')}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Scrollable grid */}
+      <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+        <div style={{
+          height: 24 * ROW_H,
+          display: 'grid',
+          gridTemplateColumns: `${GUTTER}px repeat(${days.length}, minmax(0,1fr))`,
+        }}>
+          {/* Hour labels */}
+          <div style={{ position: 'relative', borderRight: '1px solid #1A1A24' }}>
+            {hours.map(h => (
+              <div key={h} style={{
+                position: 'absolute', top: h * ROW_H, right: 8, height: ROW_H,
+                display: 'flex', alignItems: 'flex-start', paddingTop: 4,
+              }}>
+                {h > 0 && (
+                  <span style={{ color: '#5C5C70', fontSize: 11, fontFamily: 'Geist Mono, monospace' }}>
+                    {String(h).padStart(2, '0')}:00
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Day columns */}
+          {days.map(day => {
+            const dayStr  = format(day, 'yyyy-MM-dd')
+            const isTdy   = dayStr === todayStr
+            const dayEvts = events.filter(e => e.date === dayStr)
+
+            return (
+              <div key={dayStr} style={{
+                position: 'relative',
+                borderLeft: '1px solid #1A1A24',
+                background: isTdy ? 'rgba(100,97,245,0.02)' : 'transparent',
+              }}>
+                {/* Hour slots */}
+                {hours.map(h => (
+                  <div
+                    key={h}
+                    onClick={() => onSlotClick(day, h, 0)}
+                    style={{
+                      position: 'absolute', top: h * ROW_H, left: 0, right: 0,
+                      height: ROW_H, borderBottom: '1px solid #1A1A24', cursor: 'pointer',
+                    }}
+                  />
+                ))}
+
+                {/* Events */}
+                {dayEvts.map(ev => (
+                  <EventBlock key={ev.id} ev={ev} onClick={onEventClick} />
+                ))}
+
+                {/* Now line */}
+                {isTdy && (
+                  <div style={{
+                    position: 'absolute', top: nowTop - 1, left: -5, right: 0,
+                    zIndex: 5, pointerEvents: 'none',
+                    display: 'flex', alignItems: 'center',
+                  }}>
+                    <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#FF5C7A', flexShrink: 0 }} />
+                    <div style={{ flex: 1, height: 2, background: '#FF5C7A' }} />
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── MonthView ───────────────────────────────────────────────────────────────
+const WDAY_LABELS = WK_START === 0
+  ? ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
+  : ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
+
+function MonthView({ currentDate, events, selectedDate, onSelectDate, onEventClick, onSwitchToDay }) {
+  const monthStart = startOfMonth(currentDate)
+  const gridStart  = startOfWeek(monthStart, { weekStartsOn: WK_START })
+  const days = (() => {
+    const arr = eachDayOfInterval({ start: gridStart, end: addDays(gridStart, 41) })
+    return arr
+  })()
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* Weekday headers */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', flexShrink: 0 }}>
+        {WDAY_LABELS.map(d => (
+          <div key={d} style={{
+            padding: '10px 0', textAlign: 'center',
+            fontSize: 11, fontWeight: 500, letterSpacing: '0.06em',
+            color: '#5C5C70', textTransform: 'uppercase',
+            borderBottom: '1px solid #1A1A24',
+          }}>{d}</div>
+        ))}
+      </div>
+
+      {/* 6-week grid */}
+      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gridTemplateRows: 'repeat(6,1fr)', overflow: 'hidden' }}>
+        {days.map(day => {
+          const dayStr  = format(day, 'yyyy-MM-dd')
+          const inMonth = isSameMonth(day, currentDate)
+          const isTdy   = isToday(day)
+          const isSel   = isSameDay(day, selectedDate)
+          const dayEvts = events.filter(e => e.date === dayStr)
+
+          return (
+            <div
+              key={dayStr}
+              onClick={() => { onSelectDate(day); onSwitchToDay(day) }}
+              style={{
+                borderRight: '1px solid #1A1A24', borderBottom: '1px solid #1A1A24',
+                background: !inMonth ? '#0E0E14' : 'transparent',
+                padding: 6, cursor: 'pointer', overflow: 'hidden', minHeight: 0,
+              }}
+            >
+              <div style={{ marginBottom: 3 }}>
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  width: 24, height: 24, borderRadius: 6,
+                  background: isTdy ? '#6461F5' : isSel ? '#1D1C38' : 'transparent',
+                  color: !inMonth ? '#2A2A3A' : isTdy ? '#fff' : isSel ? '#A5A3FF' : '#ECECF1',
+                  fontSize: 12, fontWeight: 500,
+                }}>
+                  {format(day, 'd')}
+                </span>
+              </div>
+
+              {dayEvts.slice(0, 3).map(ev => {
+                const c = PALETTE[ev.color] || PALETTE.indigo
+                return (
+                  <div
+                    key={ev.id}
+                    onClick={e => { e.stopPropagation(); onEventClick(ev) }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 4,
+                      padding: '2px 5px', borderRadius: 4, marginBottom: 2,
+                      background: c.bg, overflow: 'hidden', cursor: 'pointer',
+                    }}
+                  >
+                    <div style={{ width: 4, height: 4, borderRadius: '50%', background: c.dot, flexShrink: 0 }} />
+                    <span style={{ color: c.text, fontSize: 11, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {ev.title}
+                    </span>
+                  </div>
+                )
+              })}
+
+              {dayEvts.length > 3 && (
+                <div style={{ fontSize: 11, color: '#6F6F82', padding: '1px 5px' }}>
+                  +{dayEvts.length - 3} more
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ─── MiniMonth (sidebar) ─────────────────────────────────────────────────────
+const MINI_LABELS = WK_START === 0 ? ['S','M','T','W','T','F','S'] : ['M','T','W','T','F','S','S']
+
+function MiniMonth({ displayDate, onDisplayChange, selectedDate, onSelectDate, events }) {
+  const gridStart = startOfWeek(startOfMonth(displayDate), { weekStartsOn: WK_START })
+  const days = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i))
+
+  return (
+    <div style={{ background: '#111118', border: '1px solid #1E1E29', borderRadius: 16, padding: 16, flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: '#ECECF1' }}>
+          {format(displayDate, 'MMMM yyyy')}
+        </span>
+        <div style={{ display: 'flex', gap: 4 }}>
+          {[
+            { fn: () => onDisplayChange(d => subMonths(d, 1)), label: '‹' },
+            { fn: () => onDisplayChange(d => addMonths(d, 1)), label: '›' },
+          ].map(({ fn, label }) => (
+            <button key={label} onClick={fn} aria-label={label === '‹' ? 'Previous month' : 'Next month'} style={{
+              width: 22, height: 22, borderRadius: 6, border: '1px solid #23232F',
+              background: '#13131A', color: '#8B8B9E', fontSize: 14, cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+            }}>{label}</button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', marginBottom: 2 }}>
+        {MINI_LABELS.map((d, i) => (
+          <div key={i} style={{ textAlign: 'center', fontSize: 10, color: '#5C5C70', padding: '2px 0' }}>{d}</div>
+        ))}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 1 }}>
+        {days.map(day => {
+          const dayStr    = format(day, 'yyyy-MM-dd')
+          const inMonth   = isSameMonth(day, displayDate)
+          const isTdy     = isToday(day)
+          const isSel     = isSameDay(day, selectedDate)
+          const dayEvts   = events.filter(e => e.date === dayStr)
+          const dotColor  = dayEvts.length > 0 ? (PALETTE[dayEvts[0].color] || PALETTE.indigo).dot : null
+
+          return (
+            <div key={dayStr} onClick={() => onSelectDate(day)} style={{ textAlign: 'center', cursor: 'pointer' }}>
+              <div style={{
+                width: 26, height: 26, margin: '0 auto',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                borderRadius: 8,
+                background: isSel ? '#6461F5' : isTdy ? '#1D1C38' : 'transparent',
+                color: !inMonth ? '#2A2A3A' : isSel ? '#fff' : isTdy ? '#A5A3FF' : '#ECECF1',
+                fontSize: 11.5, fontWeight: 500,
+              }}>
+                {format(day, 'd')}
+              </div>
+              {dotColor && (
+                <div style={{ width: 4, height: 4, borderRadius: '50%', background: dotColor, margin: '1px auto 0' }} />
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ─── TaskSidebar ─────────────────────────────────────────────────────────────
+function TaskSidebar({ selectedDate, events, onToggle }) {
+  const dayStr   = format(selectedDate, 'yyyy-MM-dd')
+  const dayEvts  = events.filter(e => e.date === dayStr)
+  const doneN    = dayEvts.filter(e => e.done).length
+  const label    = isToday(selectedDate) ? 'Today' : format(selectedDate, 'MMM d, yyyy')
+
+  return (
+    <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, flexShrink: 0 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: '#ECECF1' }}>{label}</span>
+        {dayEvts.length > 0 && (
+          <span style={{ fontSize: 11, fontFamily: 'Geist Mono, monospace', color: '#6F6F82' }}>
+            {doneN}/{dayEvts.length} done
+          </span>
+        )}
+      </div>
+
+      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {dayEvts.length === 0 ? (
+          <div style={{
+            border: '1px dashed #1E1E29', borderRadius: 12, padding: '24px 16px',
+            textAlign: 'center', color: '#5C5C70', fontSize: 12,
+          }}>Nothing scheduled</div>
+        ) : (
+          dayEvts.map(ev => {
+            const c = PALETTE[ev.color] || PALETTE.indigo
+            return (
+              <div
+                key={ev.id}
+                onClick={() => onToggle(ev)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={e => e.key === 'Enter' && onToggle(ev)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '8px 10px', borderRadius: 10,
+                  background: '#13131A', border: '1px solid #1E1E29',
+                  cursor: 'pointer',
+                }}
+              >
+                <div style={{
+                  width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
+                  border: `2px solid ${c.dot}`,
+                  background: ev.done ? c.dot : 'transparent',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  {ev.done && (
+                    <svg width="10" height="8" viewBox="0 0 10 8" fill="none">
+                      <path d="M1 4L3.5 6.5L9 1" stroke="#0C0C11" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  )}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{
+                    fontSize: 13, fontWeight: 500, color: '#ECECF1',
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    textDecoration: ev.done ? 'line-through' : 'none',
+                    opacity: ev.done ? 0.5 : 1,
+                  }}>{ev.title}</div>
+                  <div style={{ fontSize: 11, color: '#6F6F82', fontFamily: 'Geist Mono, monospace' }}>
+                    {ev.start} – {ev.end}
+                  </div>
+                </div>
+              </div>
+            )
+          })
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── CalendarPage (main) ─────────────────────────────────────────────────────
 export default function CalendarPage() {
   const { user } = useAuth()
   const qc = useQueryClient()
-  const calRef = useRef(null)
 
-  const [activeView, setActiveView] = useState('timeGridWeek')
-  const [selectedDate, setSelectedDate] = useState(null)
-  const [popover, setPopover] = useState(null)
-  const [modalOpen, setModalOpen] = useState(false)
-  const [editingTask, setEditingTask] = useState(null)
+  const [view, setView]               = useState('week')
+  const [currentDate, setCurrentDate] = useState(new Date())
+  const [selectedDate, setSelectedDate] = useState(new Date())
+  const [miniDate, setMiniDate]       = useState(new Date())
+  const [modalOpen, setModalOpen]     = useState(false)
+  const [modalDefaults, setModalDefaults] = useState(null)
+  const [taskColors, setTaskColors]   = useState(loadColors)
 
-  const { data: allTasks = [] } = useQuery({
+  const { data: rawTasks = [] } = useQuery({
     queryKey: ['allTasks', user?.id],
-    queryFn: () => getAllTasks(user.id).then((r) => r.data),
+    queryFn: () => getAllTasks(user.id).then(r => r.data),
     enabled: !!user?.id,
   })
 
-  const calendarEvents = allTasks.map((task) => ({
-    id: String(task.id),
-    title: task.name,
-    start: `${task.dateOfStart}T${task.timeOfStart}`,
-    end: `${task.dateOfEnd}T${task.timeOfEnd}`,
-    backgroundColor: statusColors[task.status?.toLowerCase()] ?? '#6366f1',
-    borderColor: 'transparent',
-    extendedProps: { task },
-  }))
+  const events = rawTasks.map(t => toEvent(t, taskColors))
 
-  const { data: dayTasks = [], isLoading: loadingDay } = useQuery({
-    queryKey: ['tasksByDate', selectedDate],
-    queryFn: () =>
-      getTasksByDate(selectedDate)
-        .then((r) => r.data)
-        .catch(() => []),
-    enabled: !!selectedDate && activeView === 'dayGridMonth',
-  })
+  const saveColor = useCallback((taskId, color) => {
+    setTaskColors(prev => {
+      const next = { ...prev, [String(taskId)]: color }
+      localStorage.setItem('calTaskColors', JSON.stringify(next))
+      return next
+    })
+  }, [])
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['allTasks'] })
@@ -74,41 +505,76 @@ export default function CalendarPage() {
     qc.invalidateQueries({ queryKey: ['next7Days'] })
   }
 
-  const deleteMutation = useMutation({
-    mutationFn: deleteTask,
-    onSuccess: () => { invalidate(); setPopover(null) },
-  })
-
-  const editMutation = useMutation({
-    mutationFn: editTask,
-    onSuccess: () => { invalidate(); setEditingTask(null) },
+  const toggleMutation = useMutation({
+    mutationFn: ({ ev }) => editTask({
+      taskId: ev.rawId,
+      name: ev.raw.name,
+      description: ev.raw.description || '',
+      dateOfStart: ev.raw.dateOfStart,
+      timeOfStart: ev.raw.timeOfStart,
+      dateOfEnd: ev.raw.dateOfEnd,
+      timeOfEnd: ev.raw.timeOfEnd,
+      status: ev.done ? 'pending' : 'done',
+    }),
+    onSuccess: invalidate,
   })
 
   const createMutation = useMutation({
     mutationFn: ({ data, repeated }) =>
       repeated ? createRepeatedTask(data) : createTask(data),
-    onSuccess: () => { invalidate(); setModalOpen(false) },
+    onSuccess: (res, vars) => {
+      const task = res?.data
+      if (task?.id && vars.color) saveColor(task.id, vars.color)
+      invalidate()
+      setModalOpen(false)
+      setModalDefaults(null)
+    },
   })
 
-  const switchView = (viewKey) => {
-    setActiveView(viewKey)
-    setSelectedDate(null)
-    setPopover(null)
-    calRef.current?.getApi().changeView(viewKey)
+  // Navigation
+  const goNext = () => {
+    if (view === 'month') setCurrentDate(d => addMonths(d, 1))
+    else if (view === 'week') setCurrentDate(d => addWeeks(d, 1))
+    else setCurrentDate(d => addDays(d, 1))
+  }
+  const goPrev = () => {
+    if (view === 'month') setCurrentDate(d => subMonths(d, 1))
+    else if (view === 'week') setCurrentDate(d => subWeeks(d, 1))
+    else setCurrentDate(d => addDays(d, -1))
+  }
+  const goToday = () => { setCurrentDate(new Date()); setSelectedDate(new Date()) }
+
+  const switchView = (v) => { setView(v) }
+
+  const openAddModal = (defaults = null) => {
+    setModalDefaults(defaults)
+    setModalOpen(true)
   }
 
-  const handleDateClick = ({ dateStr }) => {
-    if (activeView === 'dayGridMonth') {
-      setSelectedDate(dateStr)
-      setPopover(null)
-    }
+  const handleSlotClick = (day, hour) => {
+    const dateStr = format(day, 'yyyy-MM-dd')
+    const start = minsToTime(hour * 60)
+    const end   = minsToTime(hour * 60 + 60)
+    openAddModal({ date: dateStr, timeOfStart: start, timeOfEnd: end })
   }
 
-  const handleEventClick = ({ event, jsEvent }) => {
-    jsEvent.stopPropagation()
-    const task = event.extendedProps.task
-    const rect = jsEvent.target.closest('.fc-event').getBoundingClientRect()
-    setPopover({ task, x: rect.left, y: rect.bottom + 8 })
+  const handleEventClick = (ev) => {
+    toggleMutation.mutate({ ev })
+  }
+
+  const handleDayHeaderClick = (day) => {
+    setCurrentDate(day)
+    setSelectedDate(day)
+    setView('day')
+  }
+
+  const handleMiniSelectDate = (day) => {
+    setSelectedDate(day)
+    setCurrentDate(day)
+  }
+
+  const handleMonthSelectDate = (day) => {
+    setSelectedDate(day)
   }
 
   const handleCreate = async (data) => {
@@ -117,165 +583,169 @@ export default function CalendarPage() {
       description: data.description || '',
       dateOfStart: data.dateOfStart,
       timeOfStart: data.timeOfStart,
-      dateOfEnd: data.repeated ? data.repeatUntil || data.dateOfEnd : data.dateOfEnd,
-      timeOfEnd: data.timeOfEnd,
-      status: data.status,
-    }
-    await createMutation.mutateAsync({ data: payload, repeated: data.repeated })
-  }
-
-  const handleEdit = async (data) => {
-    await editMutation.mutateAsync({
-      taskId: editingTask.id,
-      name: data.name,
-      description: data.description,
-      dateOfStart: data.dateOfStart,
-      timeOfStart: data.timeOfStart,
       dateOfEnd: data.dateOfEnd,
       timeOfEnd: data.timeOfEnd,
-      status: data.status,
-    })
+      status: 'pending',
+    }
+    await createMutation.mutateAsync({ data: payload, repeated: data.repeated, color: data.color })
   }
 
-  const isMonthView = activeView === 'dayGridMonth'
+  const visibleDays = view === 'week'
+    ? getWeekDays(currentDate)
+    : view === 'day'
+      ? [currentDate]
+      : null
+
+  const title = headerTitle(view, currentDate)
+
+  // Button styles
+  const navBtn = {
+    height: 32, padding: '0 10px', borderRadius: 8,
+    border: '1px solid #23232F', background: '#13131A',
+    color: '#ECECF1', fontSize: 12, fontWeight: 500,
+    cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex',
+    alignItems: 'center', justifyContent: 'center',
+    transition: 'background 0.15s',
+  }
 
   return (
-    <div className="max-w-6xl mx-auto" onClick={() => setPopover(null)}>
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-semibold text-[#f1f1f5]">Calendar</h1>
+    <div style={{
+      position: 'fixed', left: 64, top: 0, right: 0, bottom: 0,
+      background: '#0C0C11',
+      display: 'flex', flexDirection: 'column',
+      overflow: 'hidden',
+      padding: '24px 28px 24px',
+      gap: 20,
+    }}>
+      {/* ── Header ── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexShrink: 0 }}>
+        {/* Left: label + title */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 12, color: '#7A7A8E', marginBottom: 2, letterSpacing: '0.01em' }}>Calendar</div>
+          <h1 style={{ fontSize: 24, fontWeight: 600, color: '#ECECF1', margin: 0, letterSpacing: '-0.02em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {title}
+          </h1>
+        </div>
 
-        <div className="flex items-center gap-3">
-          <div className="flex bg-[#1a1a24] border border-[#2a2a3a] rounded-lg p-1 gap-1">
-            {VIEWS.map(({ key, label, icon: Icon }) => (
-              <button
-                key={key}
-                onClick={() => switchView(key)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                  activeView === key
-                    ? 'bg-indigo-500 text-white'
-                    : 'text-[#6b7280] hover:text-[#f1f1f5]'
-                }`}
-              >
-                <Icon size={14} />
-                {label}
-              </button>
-            ))}
-          </div>
+        {/* Nav: prev / next / today */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+          <button onClick={goPrev} style={{ ...navBtn, width: 32, padding: 0 }} aria-label="Previous"
+            onMouseEnter={e => e.currentTarget.style.background = '#16161F'}
+            onMouseLeave={e => e.currentTarget.style.background = '#13131A'}
+          ><ChevronLeft size={16} /></button>
 
-          <button
-            onClick={(e) => { e.stopPropagation(); setModalOpen(true) }}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-sm font-medium text-white rounded-lg transition-colors"
-          >
-            <Plus size={16} />
-            Add task
-          </button>
+          <button onClick={goNext} style={{ ...navBtn, width: 32, padding: 0 }} aria-label="Next"
+            onMouseEnter={e => e.currentTarget.style.background = '#16161F'}
+            onMouseLeave={e => e.currentTarget.style.background = '#13131A'}
+          ><ChevronRight size={16} /></button>
+
+          <button onClick={goToday} style={navBtn}
+            onMouseEnter={e => e.currentTarget.style.background = '#16161F'}
+            onMouseLeave={e => e.currentTarget.style.background = '#13131A'}
+          >Today</button>
+        </div>
+
+        {/* View switcher */}
+        <div style={{
+          display: 'flex', alignItems: 'center',
+          background: '#111118', borderRadius: 10,
+          border: '1px solid #1E1E29', padding: 3,
+          flexShrink: 0,
+        }}>
+          {['month','week','day'].map(v => (
+            <button
+              key={v}
+              onClick={() => switchView(v)}
+              style={{
+                height: 28, padding: '0 12px', borderRadius: 7, border: 'none',
+                background: view === v ? '#6461F5' : 'transparent',
+                color: view === v ? '#fff' : '#8B8B9E',
+                fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit',
+                transition: 'background 0.15s, color 0.15s',
+                textTransform: 'capitalize',
+              }}
+            >
+              {v.charAt(0).toUpperCase() + v.slice(1)}
+            </button>
+          ))}
+        </div>
+
+        {/* Add task */}
+        <button
+          onClick={() => openAddModal()}
+          style={{
+            height: 38, padding: '0 16px', borderRadius: 10, border: 'none',
+            background: '#6461F5',
+            boxShadow: 'inset 0 0 0 1px #7B78FF, 0 0 16px rgba(100,97,245,0.25)',
+            color: '#fff', fontSize: 14, fontWeight: 600, cursor: 'pointer',
+            fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 6,
+            flexShrink: 0, transition: 'background 0.15s',
+          }}
+          onMouseEnter={e => e.currentTarget.style.background = '#7270FF'}
+          onMouseLeave={e => e.currentTarget.style.background = '#6461F5'}
+        >
+          <Plus size={16} strokeWidth={2.5} />
+          Add task
+        </button>
+      </div>
+
+      {/* ── Body: calendar + sidebar ── */}
+      <div style={{ flex: 1, display: 'flex', gap: 20, overflow: 'hidden', minHeight: 0 }}>
+        {/* Calendar panel */}
+        <div style={{
+          flex: 1, background: '#111118', border: '1px solid #1E1E29',
+          borderRadius: 16, overflow: 'hidden',
+          display: 'flex', flexDirection: 'column', minWidth: 0,
+        }}>
+          {view === 'month' && (
+            <MonthView
+              currentDate={currentDate}
+              events={events}
+              selectedDate={selectedDate}
+              onSelectDate={handleMonthSelectDate}
+              onEventClick={handleEventClick}
+              onSwitchToDay={handleDayHeaderClick}
+            />
+          )}
+          {(view === 'week' || view === 'day') && visibleDays && (
+            <TimeGrid
+              days={visibleDays}
+              events={events}
+              onSlotClick={handleSlotClick}
+              onEventClick={handleEventClick}
+              onDayHeaderClick={handleDayHeaderClick}
+            />
+          )}
+        </div>
+
+        {/* Right sidebar */}
+        <div style={{
+          width: 280, flexShrink: 0,
+          display: 'flex', flexDirection: 'column', gap: 16,
+          overflow: 'hidden',
+        }}>
+          <MiniMonth
+            displayDate={miniDate}
+            onDisplayChange={setMiniDate}
+            selectedDate={selectedDate}
+            onSelectDate={handleMiniSelectDate}
+            events={events}
+          />
+          <TaskSidebar
+            selectedDate={selectedDate}
+            events={events}
+            onToggle={handleEventClick}
+          />
         </div>
       </div>
 
-      {isMonthView ? (
-        <div className="grid grid-cols-3 gap-6">
-          <div className="col-span-2 bg-[#1a1a24] border border-[#2a2a3a] rounded-2xl p-4">
-            <FullCalendar
-              ref={calRef}
-              plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-              initialView="dayGridMonth"
-              locale="en-GB"
-              events={calendarEvents}
-              dateClick={handleDateClick}
-              eventClick={handleEventClick}
-              headerToolbar={{ left: 'prev,next today', center: 'title', right: '' }}
-              height="auto"
-              eventTimeFormat={{ hour: '2-digit', minute: '2-digit', hour12: false }}
-            />
-          </div>
-
-          <div className="bg-[#1a1a24] border border-[#2a2a3a] rounded-2xl p-5">
-            {selectedDate ? (
-              <>
-                <p className="text-sm font-semibold text-[#f1f1f5] mb-4">
-                  {format(parseISO(selectedDate), 'MMMM d, yyyy')}
-                </p>
-                {loadingDay ? (
-                  <div className="flex flex-col gap-2">
-                    {[1, 2].map((i) => <div key={i} className="h-16 bg-[#22222f] rounded-xl animate-pulse" />)}
-                  </div>
-                ) : dayTasks.length === 0 ? (
-                  <p className="text-sm text-[#6b7280]">No tasks this day.</p>
-                ) : (
-                  <div className="flex flex-col gap-2">
-                    {dayTasks.map((task) => (
-                      <TaskCard
-                        key={task.id}
-                        task={task}
-                        onDelete={(id) => deleteMutation.mutate(id)}
-                        onEdit={(t) => { setEditingTask(t); setSelectedDate(null) }}
-                      />
-                    ))}
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="flex items-center justify-center h-full py-12">
-                <p className="text-sm text-[#6b7280] text-center">Click a date to see its tasks</p>
-              </div>
-            )}
-          </div>
-        </div>
-      ) : (
-        <div className="bg-[#1a1a24] border border-[#2a2a3a] rounded-2xl p-4">
-          <FullCalendar
-            ref={calRef}
-            plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-            initialView="timeGridWeek"
-            locale="en-GB"
-            events={calendarEvents}
-            dateClick={handleDateClick}
-            eventClick={handleEventClick}
-            headerToolbar={{ left: 'prev,next today', center: 'title', right: '' }}
-            slotMinTime="06:00:00"
-            slotMaxTime="23:00:00"
-            allDaySlot={false}
-            nowIndicator={true}
-            height={650}
-            slotLabelFormat={{ hour: '2-digit', minute: '2-digit', hour12: false }}
-            eventTimeFormat={{ hour: '2-digit', minute: '2-digit', hour12: false }}
-          />
-        </div>
-      )}
-
-      {popover && (
-        <TaskPopover
-          task={popover.task}
-          x={popover.x}
-          y={popover.y}
-          onClose={() => setPopover(null)}
-          onEdit={(task) => { setPopover(null); setEditingTask(task) }}
-          onDelete={(id) => deleteMutation.mutate(id)}
-        />
-      )}
-
+      {/* Modal */}
       <TaskModal
         open={modalOpen}
-        onClose={() => setModalOpen(false)}
+        onClose={() => { setModalOpen(false); setModalDefaults(null) }}
         onSubmit={handleCreate}
-        title="New task"
-        defaultValues={selectedDate ? { dateOfStart: selectedDate, dateOfEnd: selectedDate } : undefined}
-      />
-
-      <TaskModal
-        open={!!editingTask}
-        onClose={() => setEditingTask(null)}
-        onSubmit={handleEdit}
-        title="Edit task"
-        defaultValues={editingTask ? {
-          name: editingTask.name,
-          description: editingTask.description,
-          dateOfStart: editingTask.dateOfStart,
-          timeOfStart: editingTask.timeOfStart?.substring(0, 5),
-          dateOfEnd: editingTask.dateOfEnd,
-          timeOfEnd: editingTask.timeOfEnd?.substring(0, 5),
-          status: editingTask.status,
-        } : null}
+        modalTitle="New task"
+        defaultValues={modalDefaults}
       />
     </div>
   )
