@@ -6,6 +6,7 @@ import { CalendarDays, Plus, Check, Flag, SlidersHorizontal, Trash2 } from 'luci
 import { getAllTasks, createTask, editTask, deleteTask } from '../api/tasks'
 import { useAuth } from '../context/AuthContext'
 import TaskModal from '../components/tasks/TaskModal'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 // ─── Color / category palette ─────────────────────────────────────────────────
 
@@ -131,6 +132,7 @@ function DayCard({ date, tasks, selected, onClick }) {
 
 function UpNextCard({ task, countdown, color, onMarkDone }) {
   const pal = PALETTE[color] || PALETTE.indigo
+  const isMobile = useIsMobile()
   return (
     <div style={{ background: '#111118', border: '1px solid #1E1E29', borderRadius: 16, overflow: 'hidden', display: 'flex' }}>
       <div style={{ width: 4, background: pal.dot, flexShrink: 0 }} />
@@ -149,9 +151,10 @@ function UpNextCard({ task, countdown, color, onMarkDone }) {
             }}>{countdown.pill}</span>
           )}
         </div>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+        {/* Stack vertically on mobile */}
+        <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'flex-start' : 'flex-start', justifyContent: 'space-between', gap: 12 }}>
           <div>
-            <p style={{ fontSize: 22, fontWeight: 600, color: '#ECECF1', margin: '0 0 6px' }}>{task.name}</p>
+            <p style={{ fontSize: isMobile ? 18 : 22, fontWeight: 600, color: '#ECECF1', margin: '0 0 6px' }}>{task.name}</p>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 13, color: '#8B8B9E', fontFamily: 'Geist Mono, monospace' }}>
                 {task.timeOfStart?.substring(0, 5)} – {task.timeOfEnd?.substring(0, 5)}
@@ -164,7 +167,10 @@ function UpNextCard({ task, countdown, color, onMarkDone }) {
             onClick={onMarkDone}
             aria-label="Mark done"
             style={{
-              display: 'flex', alignItems: 'center', gap: 6, height: 34, padding: '0 12px',
+              display: 'flex', alignItems: 'center', gap: 6,
+              height: 34, padding: '0 12px',
+              width: isMobile ? '100%' : 'auto',
+              justifyContent: isMobile ? 'center' : 'flex-start',
               borderRadius: 8, background: '#1A1A28', border: '1px solid #2A2A3A',
               color: '#8B8B9E', fontSize: 13, fontWeight: 500, cursor: 'pointer',
               fontFamily: 'inherit', flexShrink: 0, transition: 'border-color 0.15s, color 0.15s',
@@ -187,6 +193,7 @@ function TaskRow({ task, onToggle, onDelete }) {
   const pal = PALETTE[getTaskColor(task.id)] || PALETTE.indigo
   const done = task.status === 'done'
   const hasTime = !isAnytime(task)
+  const isMobile = useIsMobile()
   const [hovered, setHovered] = useState(false)
   return (
     <div
@@ -212,34 +219,50 @@ function TaskRow({ task, onToggle, onDelete }) {
         }}>
           {done && <Check size={11} color="#0C0C11" strokeWidth={3} />}
         </div>
-        <span style={{
-          flex: 1, fontSize: 13.5, fontWeight: 500, overflow: 'hidden',
-          textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          color: done ? '#6F6F82' : '#ECECF1',
-          textDecoration: done ? 'line-through' : 'none',
-          transition: 'color 0.15s',
-        }}>{task.name}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <span style={{
+            display: 'block', fontSize: 13.5, fontWeight: 500,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            color: done ? '#6F6F82' : '#ECECF1',
+            textDecoration: done ? 'line-through' : 'none',
+            transition: 'color 0.15s',
+          }}>{task.name}</span>
+          {/* Time shown as sub-label on mobile instead of separate column */}
+          {isMobile && hasTime && (
+            <span style={{ fontSize: 11, color: '#6F6F82', fontFamily: 'Geist Mono, monospace' }}>
+              {task.timeOfStart?.substring(0, 5)} – {task.timeOfEnd?.substring(0, 5)}
+            </span>
+          )}
+        </div>
         {task.urgent && !done && <Flag size={13} color="#FB7199" />}
-        <span style={{
-          fontSize: 11, padding: '2px 7px', borderRadius: 20, flexShrink: 0,
-          background: pal.bg, color: pal.text,
-        }}>{pal.name}</span>
-        <span style={{
-          width: 92, textAlign: 'right', flexShrink: 0,
-          fontSize: 12, color: '#6F6F82', fontFamily: 'Geist Mono, monospace',
-        }}>
-          {hasTime ? `${task.timeOfStart?.substring(0, 5)} – ${task.timeOfEnd?.substring(0, 5)}` : 'Anytime'}
-        </span>
+        {/* Category badge — hidden on mobile to save space */}
+        {!isMobile && (
+          <span style={{
+            fontSize: 11, padding: '2px 7px', borderRadius: 20, flexShrink: 0,
+            background: pal.bg, color: pal.text,
+          }}>{pal.name}</span>
+        )}
+        {/* Time column — desktop only */}
+        {!isMobile && (
+          <span style={{
+            width: 92, textAlign: 'right', flexShrink: 0,
+            fontSize: 12, color: '#6F6F82', fontFamily: 'Geist Mono, monospace',
+          }}>
+            {hasTime ? `${task.timeOfStart?.substring(0, 5)} – ${task.timeOfEnd?.substring(0, 5)}` : 'Anytime'}
+          </span>
+        )}
       </button>
+      {/* Delete — always visible on mobile (no hover on touch), hover-only on desktop */}
       <button
         onClick={() => onDelete(task.id)}
         aria-label={`Delete ${task.name}`}
         style={{
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          width: 28, height: 28, borderRadius: 7, border: 'none',
+          width: 36, height: 36, borderRadius: 7, border: 'none',
           background: 'transparent', cursor: 'pointer', flexShrink: 0,
           marginRight: 4, color: '#5C5C70',
-          opacity: hovered ? 1 : 0, transition: 'opacity 0.15s, color 0.15s, background 0.15s',
+          opacity: isMobile ? 1 : (hovered ? 1 : 0),
+          transition: 'opacity 0.15s, color 0.15s, background 0.15s',
         }}
         onMouseEnter={e => { e.currentTarget.style.color = '#FB7199'; e.currentTarget.style.background = '#2A1520' }}
         onMouseLeave={e => { e.currentTarget.style.color = '#5C5C70'; e.currentTarget.style.background = 'transparent' }}
@@ -396,6 +419,7 @@ export default function DashboardPage() {
   const { user } = useAuth()
   const navigate = useNavigate()
   const qc = useQueryClient()
+  const isMobile = useIsMobile()
 
   const todayStr = format(new Date(), 'yyyy-MM-dd')
   const [selectedDate, setSelectedDate] = useState(todayStr)
@@ -554,8 +578,8 @@ export default function DashboardPage() {
         @media (max-width: 1079px) { .dash-grid { grid-template-columns: 1fr !important; } }
       `}</style>
 
-      <div style={{ minHeight: '100vh', padding: '28px 32px 40px', overflowX: 'hidden' }}>
-        <div style={{ maxWidth: 1240, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 22 }}>
+      <div style={{ minHeight: '100vh', padding: isMobile ? '16px 16px 24px' : '28px 32px 40px', overflowX: 'hidden' }}>
+        <div style={{ maxWidth: 1240, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: isMobile ? 14 : 22 }}>
 
           {/* 1. Header */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
@@ -563,35 +587,38 @@ export default function DashboardPage() {
               <p style={{ fontSize: 12, color: '#7A7A8E', margin: '0 0 4px' }}>
                 {format(new Date(), 'EEEE, MMMM d')}
               </p>
-              <h1 style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-0.025em', color: '#ECECF1', margin: '0 0 5px' }}>
+              <h1 style={{ fontSize: isMobile ? 22 : 28, fontWeight: 600, letterSpacing: '-0.025em', color: '#ECECF1', margin: '0 0 5px' }}>
                 {getGreeting(user?.firstname)}
               </h1>
               <p style={{ fontSize: 13.5, color: '#8B8B9E', margin: 0 }}>{summaryLine}</p>
             </div>
-            <button
-              onClick={() => navigate('/calendar')}
-              aria-label="Open calendar"
-              style={{
-                display: 'flex', alignItems: 'center', gap: 7, alignSelf: 'flex-start',
-                height: 38, padding: '0 14px', borderRadius: 10,
-                background: '#13131A', border: '1px solid #23232F',
-                color: '#8B8B9E', fontSize: 13, fontWeight: 500,
-                cursor: 'pointer', fontFamily: 'inherit',
-                transition: 'border-color 0.15s, color 0.15s',
-              }}
-              onMouseEnter={e => { e.currentTarget.style.borderColor = '#6461F5'; e.currentTarget.style.color = '#ECECF1' }}
-              onMouseLeave={e => { e.currentTarget.style.borderColor = '#23232F'; e.currentTarget.style.color = '#8B8B9E' }}
-            >
-              <CalendarDays size={14} />
-              Open calendar
-            </button>
+            {/* Calendar shortcut — hidden on mobile (use bottom nav tab) */}
+            {!isMobile && (
+              <button
+                onClick={() => navigate('/calendar')}
+                aria-label="Open calendar"
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 7, alignSelf: 'flex-start',
+                  height: 38, padding: '0 14px', borderRadius: 10,
+                  background: '#13131A', border: '1px solid #23232F',
+                  color: '#8B8B9E', fontSize: 13, fontWeight: 500,
+                  cursor: 'pointer', fontFamily: 'inherit',
+                  transition: 'border-color 0.15s, color 0.15s',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = '#6461F5'; e.currentTarget.style.color = '#ECECF1' }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = '#23232F'; e.currentTarget.style.color = '#8B8B9E' }}
+              >
+                <CalendarDays size={14} />
+                Open calendar
+              </button>
+            )}
           </div>
 
           {/* 2. Quick add bar */}
           <div style={{
             height: 52, borderRadius: 14,
             background: '#111118', border: `1px solid ${qaFocused ? '#6461F5' : '#1E1E29'}`,
-            display: 'flex', alignItems: 'center', gap: 12, padding: '0 14px 0 16px',
+            display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 12, padding: isMobile ? '0 10px 0 12px' : '0 14px 0 16px',
             transition: 'border-color 0.15s',
           }}>
             <Plus size={18} color="#7C7AFF" strokeWidth={2.5} style={{ flexShrink: 0 }} />
@@ -601,50 +628,81 @@ export default function DashboardPage() {
               onFocus={() => setQaFocused(true)}
               onBlur={() => setQaFocused(false)}
               onKeyDown={e => { if (e.key === 'Enter') handleQuickAdd() }}
-              placeholder={qaPlaceholder}
+              placeholder={isMobile ? 'Add a task…' : qaPlaceholder}
               aria-label="Quick add task"
               style={{
                 flex: 1, background: 'transparent', border: 'none', outline: 'none',
-                color: '#ECECF1', fontSize: 14.5, fontFamily: 'inherit', minWidth: 0,
+                color: '#ECECF1', fontSize: isMobile ? 14 : 14.5, fontFamily: 'inherit', minWidth: 0,
               }}
             />
-            <span style={{
-              fontSize: 11, color: '#5C5C70', border: '1px solid #2A2A3A',
-              borderRadius: 5, padding: '2px 6px', fontFamily: 'Geist Mono, monospace',
-              flexShrink: 0, whiteSpace: 'nowrap',
-            }}>Enter</span>
-            <button
-              onClick={() => {
-                const name = quickAdd.trim()
-                const h = now.getHours()
-                setModalDefaults({
-                  name,
-                  date: selectedDate,
-                  timeOfStart: `${String(h).padStart(2, '0')}:00`,
-                  timeOfEnd: `${String((h + 1) % 24).padStart(2, '0')}:00`,
-                })
-                setModalOpen(true)
-              }}
-              aria-label="More options"
-              title="Set time, label & more"
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                width: 34, height: 34, borderRadius: 8, flexShrink: 0,
-                background: 'transparent', border: '1px solid #2A2A3A',
-                color: '#6F6F82', cursor: 'pointer',
-                transition: 'border-color 0.15s, color 0.15s, background 0.15s',
-              }}
-              onMouseEnter={e => { e.currentTarget.style.borderColor = '#6461F5'; e.currentTarget.style.color = '#A5A3FF'; e.currentTarget.style.background = '#1A1A2E' }}
-              onMouseLeave={e => { e.currentTarget.style.borderColor = '#2A2A3A'; e.currentTarget.style.color = '#6F6F82'; e.currentTarget.style.background = 'transparent' }}
-            >
-              <SlidersHorizontal size={14} />
-            </button>
+            {/* Enter hint — desktop only */}
+            {!isMobile && (
+              <span style={{
+                fontSize: 11, color: '#5C5C70', border: '1px solid #2A2A3A',
+                borderRadius: 5, padding: '2px 6px', fontFamily: 'Geist Mono, monospace',
+                flexShrink: 0, whiteSpace: 'nowrap',
+              }}>Enter</span>
+            )}
+            {/* More options — desktop only */}
+            {!isMobile && (
+              <button
+                onClick={() => {
+                  const name = quickAdd.trim()
+                  const h = now.getHours()
+                  setModalDefaults({
+                    name,
+                    date: selectedDate,
+                    timeOfStart: `${String(h).padStart(2, '0')}:00`,
+                    timeOfEnd: `${String((h + 1) % 24).padStart(2, '0')}:00`,
+                  })
+                  setModalOpen(true)
+                }}
+                aria-label="More options"
+                title="Set time, label & more"
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  width: 34, height: 34, borderRadius: 8, flexShrink: 0,
+                  background: 'transparent', border: '1px solid #2A2A3A',
+                  color: '#6F6F82', cursor: 'pointer',
+                  transition: 'border-color 0.15s, color 0.15s, background 0.15s',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = '#6461F5'; e.currentTarget.style.color = '#A5A3FF'; e.currentTarget.style.background = '#1A1A2E' }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = '#2A2A3A'; e.currentTarget.style.color = '#6F6F82'; e.currentTarget.style.background = 'transparent' }}
+              >
+                <SlidersHorizontal size={14} />
+              </button>
+            )}
+            {/* On mobile: options icon opens modal directly */}
+            {isMobile && (
+              <button
+                onClick={() => {
+                  const name = quickAdd.trim()
+                  const h = now.getHours()
+                  setModalDefaults({
+                    name,
+                    date: selectedDate,
+                    timeOfStart: `${String(h).padStart(2, '0')}:00`,
+                    timeOfEnd: `${String((h + 1) % 24).padStart(2, '0')}:00`,
+                  })
+                  setModalOpen(true)
+                }}
+                aria-label="More options"
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  width: 36, height: 36, borderRadius: 8, flexShrink: 0,
+                  background: 'transparent', border: 'none',
+                  color: '#6F6F82', cursor: 'pointer',
+                }}
+              >
+                <SlidersHorizontal size={16} />
+              </button>
+            )}
             <button
               onClick={handleQuickAdd}
               disabled={!quickAdd.trim()}
               aria-label="Add task"
               style={{
-                height: 34, padding: '0 14px', borderRadius: 8, flexShrink: 0,
+                height: 34, padding: isMobile ? '0 12px' : '0 14px', borderRadius: 8, flexShrink: 0,
                 background: '#6461F5', border: 'none', boxShadow: 'inset 0 0 0 1px #7B78FF',
                 color: '#fff', fontSize: 13.5, fontWeight: 600,
                 cursor: quickAdd.trim() ? 'pointer' : 'not-allowed',
@@ -654,27 +712,42 @@ export default function DashboardPage() {
               onMouseEnter={e => { if (quickAdd.trim()) e.currentTarget.style.background = '#7270FF' }}
               onMouseLeave={e => e.currentTarget.style.background = '#6461F5'}
             >
-              Add task
+              {isMobile ? <Plus size={16} /> : 'Add task'}
             </button>
           </div>
 
-          {/* 3. Week strip */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 8 }}>
-            {weekDays.map(d => (
-              <DayCard
-                key={d}
-                date={d}
-                tasks={tasksByDay[d] || []}
-                selected={selectedDate === d}
-                onClick={() => setSelectedDate(d)}
-              />
-            ))}
-          </div>
+          {/* 3. Week strip — horizontal scroll on mobile, 7-col grid on desktop */}
+          {isMobile ? (
+            <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4, scrollbarWidth: 'none' }}>
+              {weekDays.map(d => (
+                <div key={d} style={{ minWidth: 76, flexShrink: 0 }}>
+                  <DayCard
+                    date={d}
+                    tasks={tasksByDay[d] || []}
+                    selected={selectedDate === d}
+                    onClick={() => setSelectedDate(d)}
+                  />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 8 }}>
+              {weekDays.map(d => (
+                <DayCard
+                  key={d}
+                  date={d}
+                  tasks={tasksByDay[d] || []}
+                  selected={selectedDate === d}
+                  onClick={() => setSelectedDate(d)}
+                />
+              ))}
+            </div>
+          )}
 
           {/* 4. Content grid */}
           <div
             className="dash-grid"
-            style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.6fr) minmax(300px, 1fr)', gap: 16 }}
+            style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.6fr) minmax(300px, 1fr)', gap: 16 }}
           >
             {/* Left column */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>

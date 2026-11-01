@@ -5,6 +5,7 @@ import { Mail, User, AtSign, CheckCircle2, Clock, Flame, BarChart2 } from 'lucid
 import { useAuth } from '../context/AuthContext'
 import { getAllTasks, getUserProfileImg } from '../api/tasks'
 import api from '../api/axios'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 function Card({ children, style }) {
   return (
@@ -65,6 +66,7 @@ function calcStreak(tasks) {
 
 export default function ProfilePage() {
   const { user } = useAuth()
+  const isMobile = useIsMobile()
   const [avatarUrl, setAvatarUrl] = useState(null)
 
   const { data: allTasks = [] } = useQuery({
@@ -94,19 +96,19 @@ export default function ProfilePage() {
     .filter(Boolean).map(n => n[0].toUpperCase()).join('')
 
   return (
-    <div style={{ minHeight: '100vh', padding: '28px 32px 40px' }}>
-      <div style={{ maxWidth: 860, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 22 }}>
+    <div style={{ minHeight: '100vh', padding: isMobile ? '16px 16px 24px' : '28px 32px 40px' }}>
+      <div style={{ maxWidth: 860, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: isMobile ? 14 : 22 }}>
 
         {/* Header */}
         <div>
           <p style={{ fontSize: 12, color: '#7A7A8E', margin: '0 0 4px' }}>Account</p>
-          <h1 style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-0.025em', color: '#ECECF1', margin: 0 }}>
+          <h1 style={{ fontSize: isMobile ? 22 : 28, fontWeight: 600, letterSpacing: '-0.025em', color: '#ECECF1', margin: 0 }}>
             Profile
           </h1>
         </div>
 
-        {/* Main grid */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.2fr)', gap: 16, alignItems: 'start' }}>
+        {/* Main grid — single column on mobile */}
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1fr) minmax(0, 1.2fr)', gap: 16, alignItems: 'start' }}>
 
           {/* Left: avatar + info */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>

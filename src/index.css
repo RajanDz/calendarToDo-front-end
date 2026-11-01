@@ -10,9 +10,22 @@ body {
   -moz-osx-font-smoothing: grayscale;
   margin: 0;
   overflow: hidden;
+  /* allow overscroll-bounce to feel native on iOS */
+  overscroll-behavior: none;
 }
 
 #root { width: 100%; height: 100vh; overflow: hidden; }
+
+/* ── Mobile: let pages scroll normally, desktop keeps overflow:hidden ── */
+@media (max-width: 767px) {
+  body        { overflow: auto; -webkit-overflow-scrolling: touch; }
+  #root       { height: auto; min-height: 100vh; overflow: visible; }
+  .sidebar-rail { display: none; }
+}
+
+/* ── Safe-area padding helpers (notch / home-indicator) ── */
+.safe-bottom { padding-bottom: env(safe-area-inset-bottom, 0px); }
+.safe-top    { padding-top:    env(safe-area-inset-top,    0px); }
 
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }

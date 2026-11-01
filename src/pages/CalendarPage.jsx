@@ -1,19 +1,21 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  format, startOfWeek, endOfWeek, startOfMonth,
+  format, parseISO, startOfWeek, endOfWeek, startOfMonth,
   eachDayOfInterval, addDays, addWeeks, addMonths, subWeeks, subMonths,
   isSameDay, isSameMonth, isToday,
 } from 'date-fns'
-import { ChevronLeft, ChevronRight, Plus } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Plus, PanelRight } from 'lucide-react'
 import { getAllTasks, createTask, editTask, deleteTask, createRepeatedTask } from '../api/tasks'
 import TaskModal from '../components/tasks/TaskModal'
 import { useAuth } from '../context/AuthContext'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 // ─── Design tokens ──────────────────────────────────────────────────────────
-const ROW_H = 56      // px per hour
-const GUTTER = 60     // px for time-label gutter
+const ROW_H    = 56   // px per hour
+const GUTTER   = 60   // px for time-label gutter
 const WK_START = 0    // 0 = Sunday
+const MAX_COLS = 3    // max side-by-side columns in the time grid
 
 const PALETTE = {
   indigo:  { bg: '#1F1E44', border: '#34327A', text: '#CFCEFF', dot: '#7C7AFF' },
@@ -69,14 +71,63 @@ function headerTitle(view, date) {
   return `${format(ws, 'MMM d')} – ${format(we, 'MMM d, yyyy')}`
 }
 
+// ─── layoutEvents ────────────────────────────────────────────────────────────
+function layoutEvents(dayEvts) {
+  if (dayEvts.length === 0) return []
+  const sorted = [...dayEvts].sort((a, b) => {
+    const as = parseMin(a.start), bs = parseMin(b.start)
+    return as !== bs ? as - bs : parseMin(b.end) - parseMin(a.end)
+  })
+  const slots = []
+  const positioned = sorted.map(ev => {
+    const s = parseMin(ev.start)
+    const e = Math.max(parseMin(ev.end), s + 1)
+    let col = slots.findIndex(endAt => endAt <= s)
+    if (col === -1) { col = slots.length; slots.push(e) } else slots[col] = e
+    return { ...ev, _col: col, _s: s, _e: e }
+  })
+  return positioned.map(ev => {
+    const concurrent = positioned.filter(o => o._s < ev._e && o._e > ev._s)
+    const total = Math.max(...concurrent.map(o => o._col)) + 1
+    return { ...ev, _total: total }
+  })
+}
+
+function computeOverflowPills(laidOut, maxCols = MAX_COLS) {
+  const overflow = laidOut.filter(ev => ev._total > maxCols && ev._col >= maxCols - 1)
+  if (overflow.length === 0) return []
+  const sorted = [...overflow].sort((a, b) => a._s - b._s)
+  const used = new Set()
+  const pills = []
+  for (const ev of sorted) {
+    if (used.has(ev.id)) continue
+    const group = sorted.filter(o => !used.has(o.id) && o._s < ev._e && o._e > ev._s)
+    group.forEach(o => used.add(o.id))
+    pills.push({ count: group.length, startMin: Math.min(...group.map(o => o._s)) })
+  }
+  return pills
+}
+
 // ─── EventBlock (time-grid) ──────────────────────────────────────────────────
-function EventBlock({ ev, onClick, onDelete }) {
+const COL_EDGE = 4   // px from column wall
+const COL_GAP  = 3   // px between sibling event columns
+
+function EventBlock({ ev, onClick, onDelete, colIndex = 0, colCount = 1 }) {
   const c = PALETTE[ev.color] || PALETTE.indigo
   const startMin = parseMin(ev.start)
   const endMin   = parseMin(ev.end)
-  const durMin   = Math.max(endMin - startMin, 20)
+  const durMin   = endMin - startMin
   const top    = (startMin / 60) * ROW_H + 2
-  const height = Math.max((durMin / 60) * ROW_H - 4, (20 / 60) * ROW_H)
+  const height = Math.max((durMin / 60) * ROW_H - 4, 30)
+
+  const slotW    = 1 / colCount
+  const leftFrac = colIndex * slotW
+  const rightFrac = 1 - (colIndex + 1) * slotW
+  const leftPx  = leftFrac  === 0 ? COL_EDGE : COL_GAP / 2
+  const rightPx = rightFrac === 0 ? COL_EDGE : COL_GAP / 2
+  const leftCSS  = `calc(${leftFrac  * 100}% + ${leftPx}px)`
+  const rightCSS = `calc(${rightFrac * 100}% + ${rightPx}px)`
+
   const [hovered, setHovered] = useState(false)
 
   return (
@@ -85,7 +136,7 @@ function EventBlock({ ev, onClick, onDelete }) {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        position: 'absolute', top, left: 4, right: 4, height,
+        position: 'absolute', top, left: leftCSS, right: rightCSS, height,
         background: c.bg, border: `1px solid ${c.border}`,
         borderRadius: 8, padding: '6px 8px',
         cursor: 'pointer', opacity: ev.done ? 0.45 : 1,
@@ -125,9 +176,236 @@ function EventBlock({ ev, onClick, onDelete }) {
   )
 }
 
+// ─── OverflowPill ─────────────────────────────────────────────────────────────
+function OverflowPill({ count, startMin, onClick, maxCols = MAX_COLS }) {
+  const top      = (startMin / 60) * ROW_H + 2
+  const leftFrac = (maxCols - 1) / maxCols
+  const [hovered, setHovered] = useState(false)
+  return (
+    <div
+      onClick={e => { e.stopPropagation(); onClick() }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        position: 'absolute',
+        top,
+        left:   `calc(${leftFrac * 100}% + ${COL_GAP / 2}px)`,
+        right:  `${COL_EDGE}px`,
+        height: 26,
+        background: hovered ? '#1E1E2E' : '#16161F',
+        border: `1px dashed ${hovered ? '#6461F5' : '#2E2E42'}`,
+        borderRadius: 8,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        color: hovered ? '#A5A3FF' : '#6F6F82',
+        fontSize: 11, fontWeight: 600,
+        zIndex: 2, cursor: 'pointer',
+        transition: 'background 0.15s, border-color 0.15s, color 0.15s',
+      }}
+    >
+      +{count} more
+    </div>
+  )
+}
+
+// ─── DayDetailPopup ───────────────────────────────────────────────────────────
+const POPUP_COL_W   = 180  // min px per event column in the popup
+const POPUP_LABEL_W = 52
+
+function DayDetailPopup({ dayStr, events, onClose, onEventClick, onDeleteEvent, onSwitchToDay }) {
+  const isMobile = useIsMobile()
+  const dayEvts = useMemo(() => events.filter(e => e.date === dayStr), [events, dayStr])
+  const laidOut = useMemo(() => layoutEvents(dayEvts), [dayEvts])
+  const [hoveredId, setHoveredId] = useState(null)
+
+  useEffect(() => {
+    const handler = e => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
+
+  const allStarts  = laidOut.map(e => e._s)
+  const allEnds    = laidOut.map(e => e._e)
+  const startHour  = laidOut.length ? Math.max(0,  Math.floor(Math.min(...allStarts) / 60))        : 0
+  const endHour    = laidOut.length ? Math.min(24, Math.ceil(Math.max(...allEnds, startHour * 60 + 60) / 60)) : 1
+  const hours      = Array.from({ length: endHour - startHour }, (_, i) => startHour + i)
+  const gridH      = (endHour - startHour) * ROW_H
+
+  const peakCols   = laidOut.length ? Math.max(...laidOut.map(e => e._total)) : 1
+  const eventAreaW = Math.max(peakCols * POPUP_COL_W, 320)
+
+  const date = parseISO(dayStr)
+
+  const panelStyle = isMobile ? {
+    // Bottom sheet on mobile
+    position: 'fixed', bottom: 0, left: 0, right: 0,
+    height: '88vh',
+    background: '#111118', border: '1px solid #1E1E29',
+    borderRadius: '16px 16px 0 0',
+    overflow: 'hidden', display: 'flex', flexDirection: 'column',
+    zIndex: 201, boxShadow: '0 -8px 40px rgba(0,0,0,0.7)',
+    paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+  } : {
+    // Centered modal on desktop
+    position: 'fixed', top: '50%', left: '50%',
+    transform: 'translate(-50%, -50%)',
+    width: `min(${eventAreaW + POPUP_LABEL_W + 32}px, calc(100vw - 80px))`,
+    maxWidth: 920, maxHeight: '80vh',
+    background: '#111118', border: '1px solid #1E1E29', borderRadius: 16,
+    overflow: 'hidden', display: 'flex', flexDirection: 'column',
+    zIndex: 201, boxShadow: '0 24px 64px rgba(0,0,0,0.7)',
+  }
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div
+        onClick={onClose}
+        style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 200 }}
+      />
+
+      {/* Panel */}
+      <div style={panelStyle}>
+        {/* Drag handle — mobile only */}
+        {isMobile && (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 4px', flexShrink: 0 }}>
+            <div style={{ width: 36, height: 4, borderRadius: 2, background: '#2E2E42' }} />
+          </div>
+        )}
+
+        {/* Header */}
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '16px 20px', borderBottom: '1px solid #1E1E29', flexShrink: 0,
+        }}>
+          <div>
+            <div style={{ fontSize: 11, color: '#6F6F82', marginBottom: 2, letterSpacing: '0.07em', textTransform: 'uppercase' }}>
+              {format(date, 'EEEE')}
+            </div>
+            <div style={{ fontSize: 18, fontWeight: 600, color: '#ECECF1', letterSpacing: '-0.02em' }}>
+              {format(date, 'MMMM d, yyyy')}
+              <span style={{ marginLeft: 10, fontSize: 12, fontWeight: 400, color: '#6F6F82' }}>
+                {laidOut.length} task{laidOut.length !== 1 ? 's' : ''}
+              </span>
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <button
+              onClick={() => { onSwitchToDay(date); onClose() }}
+              style={{
+                height: 30, padding: '0 12px', borderRadius: 8,
+                border: '1px solid #23232F', background: '#13131A',
+                color: '#ECECF1', fontSize: 12, fontWeight: 500,
+                cursor: 'pointer', fontFamily: 'inherit',
+              }}
+            >Day view →</button>
+            <button
+              onClick={onClose}
+              style={{
+                width: 30, height: 30, borderRadius: 8,
+                border: '1px solid #23232F', background: '#13131A',
+                color: '#8B8B9E', fontSize: 18, lineHeight: 1,
+                cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}
+            >×</button>
+          </div>
+        </div>
+
+        {/* Grid */}
+        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', minHeight: 0 }}>
+          {/* Time labels */}
+          <div style={{
+            width: POPUP_LABEL_W, flexShrink: 0,
+            position: 'relative', height: gridH,
+            borderRight: '1px solid #1A1A24',
+          }}>
+            {hours.map(h => (
+              <div key={h} style={{
+                position: 'absolute', top: (h - startHour) * ROW_H, right: 8, height: ROW_H,
+                display: 'flex', alignItems: 'flex-start', paddingTop: 4,
+              }}>
+                <span style={{ color: '#5C5C70', fontSize: 11, fontFamily: 'Geist Mono, monospace' }}>
+                  {String(h).padStart(2, '0')}:00
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {/* Event area — scrolls horizontally when crowded */}
+          <div style={{ flex: 1, overflowX: 'auto' }}>
+            <div style={{ width: eventAreaW, height: gridH, position: 'relative' }}>
+              {/* Hour lines */}
+              {hours.map(h => (
+                <div key={h} style={{
+                  position: 'absolute', top: (h - startHour) * ROW_H, left: 0, right: 0,
+                  height: ROW_H, borderBottom: '1px solid #1A1A24',
+                }} />
+              ))}
+
+              {/* Events */}
+              {laidOut.map(ev => {
+                const c        = PALETTE[ev.color] || PALETTE.indigo
+                const topPx    = (ev._s - startHour * 60) / 60 * ROW_H + 2
+                const heightPx = Math.max((ev._e - ev._s) / 60 * ROW_H - 4, 30)
+                const leftPx   = ev._col * POPUP_COL_W + COL_EDGE
+                const widthPx  = POPUP_COL_W - COL_EDGE * 2
+                const isHov    = hoveredId === ev.id
+                return (
+                  <div
+                    key={ev.id}
+                    onMouseEnter={() => setHoveredId(ev.id)}
+                    onMouseLeave={() => setHoveredId(null)}
+                    onClick={e => { e.stopPropagation(); onEventClick(ev) }}
+                    style={{
+                      position: 'absolute', top: topPx, left: leftPx,
+                      width: widthPx, height: heightPx,
+                      background: c.bg, border: `1px solid ${c.border}`,
+                      borderRadius: 8, padding: '6px 8px',
+                      cursor: 'pointer', opacity: ev.done ? 0.45 : 1, overflow: 'hidden',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 2 }}>
+                      <div style={{ width: 6, height: 6, borderRadius: '50%', background: c.dot, flexShrink: 0 }} />
+                      <span style={{
+                        color: c.text, fontSize: 12.5, fontWeight: 600,
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        flex: 1, textDecoration: ev.done ? 'line-through' : 'none',
+                      }}>{ev.title}</span>
+                      {isHov && (
+                        <button
+                          onClick={e => { e.stopPropagation(); onDeleteEvent(ev.rawId) }}
+                          style={{
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            width: 18, height: 18, borderRadius: 4, border: 'none', flexShrink: 0,
+                            background: 'rgba(251,113,153,0.15)', color: '#FB7199', cursor: 'pointer', padding: 0,
+                          }}
+                        >
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/>
+                            <path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                    {heightPx > 34 && (
+                      <div style={{ color: c.text, opacity: 0.7, fontSize: 11, fontFamily: 'Geist Mono, monospace' }}>
+                        {ev.start} – {ev.end}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  )
+}
+
 // ─── TimeGrid (Week / Day) ───────────────────────────────────────────────────
-function TimeGrid({ days, events, onSlotClick, onEventClick, onDeleteEvent, onDayHeaderClick }) {
+function TimeGrid({ days, events, onSlotClick, onEventClick, onDeleteEvent, onDayHeaderClick, onOpenDayPopup }) {
   const scrollRef = useRef(null)
+  const isMobile = useIsMobile()
   const [nowMin, setNowMin] = useState(() => {
     const n = new Date(); return n.getHours() * 60 + n.getMinutes()
   })
@@ -148,51 +426,64 @@ function TimeGrid({ days, events, onSlotClick, onEventClick, onDeleteEvent, onDa
   const todayStr = format(new Date(), 'yyyy-MM-dd')
   const isWeek   = days.length > 1
 
+  // On mobile week view: narrower gutter, min 120px per day column, max 2 overlapping columns
+  const GUTTER_W        = isMobile ? 40 : GUTTER
+  const mobileWeek      = isMobile && isWeek
+  const colTemplate     = mobileWeek
+    ? `${GUTTER_W}px repeat(${days.length}, minmax(120px, 1fr))`
+    : `${GUTTER_W}px repeat(${days.length}, minmax(0, 1fr))`
+  const gridMinW        = mobileWeek ? GUTTER_W + days.length * 120 : undefined
+  const effectiveMaxCols = mobileWeek ? 2 : MAX_COLS
+
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {/* Column headers */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: `${GUTTER}px repeat(${days.length}, minmax(0,1fr))`,
-        borderBottom: '1px solid #1A1A24', flexShrink: 0,
-      }}>
-        <div />
-        {days.map(day => {
-          const isTdy = isToday(day)
-          const dayStr = format(day, 'yyyy-MM-dd')
-          return (
-            <div
-              key={dayStr}
-              onClick={() => isWeek && onDayHeaderClick(day)}
-              style={{
-                padding: '10px 0', textAlign: 'center',
-                borderLeft: '1px solid #1A1A24',
-                cursor: isWeek ? 'pointer' : 'default',
-              }}
-            >
-              <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: '0.06em', color: '#5C5C70', textTransform: 'uppercase', marginBottom: 4 }}>
-                {format(day, 'EEE')}
-              </div>
-              <div style={{
-                width: 28, height: 28, borderRadius: 6, margin: '0 auto',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                background: isTdy ? '#6461F5' : 'transparent',
-                color: isTdy ? '#fff' : '#ECECF1',
-                fontSize: 14, fontWeight: 600,
-              }}>
-                {format(day, 'd')}
-              </div>
-            </div>
-          )
-        })}
-      </div>
+      {/* Single scroll container — headers are sticky inside so they scroll horizontally
+          with the grid body but stay pinned at the top during vertical scroll */}
+      <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', overflowX: mobileWeek ? 'auto' : 'hidden' }}>
 
-      {/* Scrollable grid */}
-      <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+        {/* Sticky column headers */}
+        <div style={{
+          display: 'grid', gridTemplateColumns: colTemplate, minWidth: gridMinW,
+          borderBottom: '1px solid #1A1A24',
+          position: 'sticky', top: 0, zIndex: 10, background: '#111118',
+        }}>
+          <div />
+          {days.map(day => {
+            const isTdy  = isToday(day)
+            const dayStr = format(day, 'yyyy-MM-dd')
+            return (
+              <div
+                key={dayStr}
+                onClick={() => isWeek && onOpenDayPopup(format(day, 'yyyy-MM-dd'))}
+                style={{
+                  padding: '10px 0', textAlign: 'center',
+                  borderLeft: '1px solid #1A1A24',
+                  cursor: isWeek ? 'pointer' : 'default',
+                }}
+              >
+                <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: '0.06em', color: '#5C5C70', textTransform: 'uppercase', marginBottom: 4 }}>
+                  {format(day, 'EEE')}
+                </div>
+                <div style={{
+                  width: 28, height: 28, borderRadius: 6, margin: '0 auto',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: isTdy ? '#6461F5' : 'transparent',
+                  color: isTdy ? '#fff' : '#ECECF1',
+                  fontSize: 14, fontWeight: 600,
+                }}>
+                  {format(day, 'd')}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+
+        {/* Grid body */}
         <div style={{
           height: 24 * ROW_H,
           display: 'grid',
-          gridTemplateColumns: `${GUTTER}px repeat(${days.length}, minmax(0,1fr))`,
+          gridTemplateColumns: colTemplate,
+          minWidth: gridMinW,
         }}>
           {/* Hour labels */}
           <div style={{ position: 'relative', borderRight: '1px solid #1A1A24' }}>
@@ -215,6 +506,12 @@ function TimeGrid({ days, events, onSlotClick, onEventClick, onDeleteEvent, onDa
             const dayStr  = format(day, 'yyyy-MM-dd')
             const isTdy   = dayStr === todayStr
             const dayEvts = events.filter(e => e.date === dayStr)
+            const laidOut = layoutEvents(dayEvts)
+
+            const visibleEvts = laidOut
+              .filter(ev => ev._total <= effectiveMaxCols || ev._col < effectiveMaxCols - 1)
+              .map(ev => ev._total > effectiveMaxCols ? { ...ev, _total: effectiveMaxCols } : ev)
+            const overflowPills = computeOverflowPills(laidOut, effectiveMaxCols)
 
             return (
               <div key={dayStr} style={{
@@ -235,8 +532,13 @@ function TimeGrid({ days, events, onSlotClick, onEventClick, onDeleteEvent, onDa
                 ))}
 
                 {/* Events */}
-                {dayEvts.map(ev => (
-                  <EventBlock key={ev.id} ev={ev} onClick={onEventClick} onDelete={onDeleteEvent} />
+                {visibleEvts.map(ev => (
+                  <EventBlock key={ev.id} ev={ev} onClick={onEventClick} onDelete={onDeleteEvent} colIndex={ev._col} colCount={ev._total} />
+                ))}
+
+                {/* Overflow pills */}
+                {overflowPills.map((pill, i) => (
+                  <OverflowPill key={i} count={pill.count} startMin={pill.startMin} onClick={() => onOpenDayPopup(dayStr)} maxCols={effectiveMaxCols} />
                 ))}
 
                 {/* Now line */}
@@ -253,6 +555,225 @@ function TimeGrid({ days, events, onSlotClick, onEventClick, onDeleteEvent, onDa
               </div>
             )
           })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── MobileWeekView ──────────────────────────────────────────────────────────
+const MW_ROW_H = 40
+
+function mwLayout(dayEvts) {
+  const long  = dayEvts.filter(ev => parseMin(ev.end) - parseMin(ev.start) >= 240)
+  const short = dayEvts.filter(ev => parseMin(ev.end) - parseMin(ev.start) <  240)
+
+  // Greedy lane assignment for rails — longer task first when tied on start time
+  const longSorted = [...long].sort((a, b) => {
+    const as = parseMin(a.start), bs = parseMin(b.start)
+    if (as !== bs) return as - bs
+    return (parseMin(b.end) - parseMin(b.start)) - (parseMin(a.end) - parseMin(a.start))
+  })
+  const railEnds = []
+  const longPositioned = longSorted.map(ev => {
+    const s = parseMin(ev.start)
+    const e = Math.max(parseMin(ev.end), s + 1)
+    let lane = railEnds.findIndex(end => end <= s)
+    if (lane === -1) { lane = railEnds.length; railEnds.push(e) } else railEnds[lane] = e
+    return { ...ev, _lane: lane, _s: s, _e: e }
+  })
+  const railLaneCount = longPositioned.length ? Math.max(...longPositioned.map(e => e._lane)) + 1 : 0
+
+  // Greedy lane assignment for short tasks (independent of rails)
+  const sorted = [...short].sort((a, b) => {
+    const as = parseMin(a.start), bs = parseMin(b.start)
+    return as !== bs ? as - bs : (parseMin(b.end) - parseMin(b.start)) - (parseMin(a.end) - parseMin(a.start))
+  })
+  const laneEnds = []
+  const positioned = sorted.map(ev => {
+    const s = parseMin(ev.start)
+    const e = Math.max(parseMin(ev.end), s + 1)
+    let lane = laneEnds.findIndex(end => end <= s)
+    if (lane === -1) { lane = laneEnds.length; laneEnds.push(e) } else laneEnds[lane] = e
+    return { ...ev, _lane: lane, _s: s, _e: e }
+  })
+  const withTotal = positioned.map(ev => {
+    const concurrent = positioned.filter(o => o._s < ev._e && o._e > ev._s)
+    return { ...ev, _total: Math.max(...concurrent.map(o => o._lane)) + 1 }
+  })
+
+  return { long: longPositioned, short: withTotal, railLaneCount }
+}
+
+function mwOverflowChips(shortTasks) {
+  const overflow = shortTasks.filter(ev => ev._total > 3 && ev._lane >= 2)
+  if (!overflow.length) return []
+  const sorted = [...overflow].sort((a, b) => a._s - b._s)
+  const used = new Set()
+  const chips = []
+  for (const ev of sorted) {
+    if (used.has(ev.id)) continue
+    const group = sorted.filter(o => !used.has(o.id) && o._s < ev._e && o._e > ev._s)
+    group.forEach(o => used.add(o.id))
+    chips.push({ count: group.length, startMin: Math.min(...group.map(o => o._s)) })
+  }
+  return chips
+}
+
+function MobileWeekView({ currentDate, selectedDate, onSelectDate, onWeekChange, events, onEventClick, onSlotClick }) {
+  const weekDays  = getWeekDays(currentDate)
+  const scrollRef = useRef(null)
+  const touchX    = useRef(null)
+
+  const dayStr  = format(selectedDate, 'yyyy-MM-dd')
+  const dayEvts = events.filter(e => e.date === dayStr)
+  const { long: longTasks, short: shortTasks, railLaneCount } = useMemo(() => mwLayout(dayEvts), [dayEvts])
+  const chips = useMemo(() => mwOverflowChips(shortTasks), [shortTasks])
+
+  useEffect(() => {
+    if (!scrollRef.current) return
+    const first = dayEvts.length ? Math.min(...dayEvts.map(ev => parseMin(ev.start))) : 7 * 60
+    scrollRef.current.scrollTop = Math.max(0, (first / 60) * MW_ROW_H - MW_ROW_H)
+  }, [dayStr])
+
+  const hours    = Array.from({ length: 24 }, (_, i) => i)
+  const taskLeft = 4 + railLaneCount * 26
+
+  const goDay = (delta) => {
+    const next  = addDays(selectedDate, delta)
+    const nextW = startOfWeek(next,           { weekStartsOn: WK_START })
+    const curW  = startOfWeek(selectedDate,   { weekStartsOn: WK_START })
+    if (!isSameDay(nextW, curW)) onWeekChange(next)
+    onSelectDate(next)
+  }
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', gap: 8 }}>
+
+      {/* Week strip */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0,1fr))', gap: 4, padding: '0 12px', flexShrink: 0 }}>
+        {weekDays.map(day => {
+          const ds    = format(day, 'yyyy-MM-dd')
+          const isTdy = isToday(day)
+          const isSel = isSameDay(day, selectedDate)
+          const dots  = events.filter(e => e.date === ds).slice(0, 4)
+          return (
+            <button key={ds} onClick={() => onSelectDate(day)} style={{
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5,
+              padding: '8px 0 7px', borderRadius: 10,
+              border: `1px solid ${isSel ? '#7B78FF' : '#1E1E29'}`,
+              background: isSel ? '#6461F5' : isTdy ? '#1D1C38' : '#111118',
+              cursor: 'pointer', fontFamily: 'inherit',
+            }}>
+              <span style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em', color: isSel ? '#C7C6FF' : isTdy ? '#A5A3FF' : '#6F6F82' }}>
+                {format(day, 'EEE')}
+              </span>
+              <span style={{ fontSize: 15, fontWeight: 600, color: isSel ? '#fff' : '#ECECF1', lineHeight: 1 }}>
+                {format(day, 'd')}
+              </span>
+              <div style={{ display: 'flex', gap: 2, minHeight: 4 }}>
+                {dots.map((ev, i) => (
+                  <div key={i} style={{ width: 4, height: 4, borderRadius: '50%', background: isSel ? 'rgba(255,255,255,0.8)' : (PALETTE[ev.color] || PALETTE.indigo).dot }} />
+                ))}
+              </div>
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Selected day label */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 12px', flexShrink: 0 }}>
+        <span style={{ fontSize: 14, fontWeight: 600, color: '#ECECF1' }}>{format(selectedDate, 'EEEE, MMM d')}</span>
+        <span style={{ fontSize: 11, fontFamily: 'Geist Mono, monospace', color: '#6F6F82' }}>
+          {dayEvts.length} task{dayEvts.length !== 1 ? 's' : ''}
+        </span>
+      </div>
+
+      {/* Day grid */}
+      <div style={{
+        flex: 1, margin: '0 12px', overflow: 'hidden',
+        background: '#111118', border: '1px solid #1E1E29', borderRadius: 16,
+        display: 'flex', flexDirection: 'column', minHeight: 0,
+      }}>
+        <div
+          ref={scrollRef}
+          style={{ flex: 1, overflowY: 'auto' }}
+          onTouchStart={e => { touchX.current = e.touches[0].clientX }}
+          onTouchEnd={e => {
+            if (touchX.current === null) return
+            const dx = e.changedTouches[0].clientX - touchX.current
+            touchX.current = null
+            if (Math.abs(dx) >= 40) goDay(dx < 0 ? 1 : -1)
+          }}
+        >
+          {dayEvts.length === 0 ? (
+            <div style={{ height: 24 * MW_ROW_H, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, color: '#6F6F82' }}>
+              Nothing scheduled
+            </div>
+          ) : (
+            <div style={{ height: 24 * MW_ROW_H, display: 'flex' }}>
+              {/* Hour gutter */}
+              <div style={{ width: 40, flexShrink: 0, position: 'relative', borderRight: '1px solid #1A1A24' }}>
+                {hours.map(h => (
+                  <div key={h} style={{ position: 'absolute', top: h * MW_ROW_H, right: 6, height: MW_ROW_H, display: 'flex', alignItems: 'flex-start', paddingTop: 3 }}>
+                    {h > 0 && <span style={{ color: '#5C5C70', fontSize: 10, fontFamily: 'Geist Mono, monospace' }}>{String(h).padStart(2, '0')}:00</span>}
+                  </div>
+                ))}
+              </div>
+
+              {/* Event area */}
+              <div style={{ flex: 1, position: 'relative' }}>
+                {/* Hour lines + slot click */}
+                {hours.map(h => (
+                  <div key={h} onClick={() => onSlotClick(selectedDate, h, 0)} style={{ position: 'absolute', top: h * MW_ROW_H, left: 0, right: 0, height: MW_ROW_H, borderBottom: '1px solid #1A1A24', cursor: 'pointer' }} />
+                ))}
+
+                {/* Rail (long ≥4h) tasks — each lane at left = 4 + lane * 26 */}
+                {longTasks.map(ev => {
+                  const c    = PALETTE[ev.color] || PALETTE.indigo
+                  const s    = ev._s, e = ev._e
+                  const t    = (s / 60) * MW_ROW_H + 1
+                  const ht   = Math.max(((e - s) / 60) * MW_ROW_H - 2, 30)
+                  const left = 4 + ev._lane * 26
+                  return (
+                    <div key={ev.id} onClick={ev2 => { ev2.stopPropagation(); onEventClick(ev) }} style={{ position: 'absolute', top: t, left, width: 22, height: ht, background: c.bg, border: `1px solid ${c.border}`, borderRadius: 7, cursor: 'pointer', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <span style={{ writingMode: 'vertical-rl', fontSize: 11, fontWeight: 600, color: c.text, overflow: 'hidden', maxHeight: '100%', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ev.title}</span>
+                    </div>
+                  )
+                })}
+
+                {/* Short tasks */}
+                {shortTasks.map(ev => {
+                  if (ev._total > 3 && ev._lane >= 2) return null
+                  const c     = PALETTE[ev.color] || PALETTE.indigo
+                  const total = Math.min(ev._total, 3)
+                  const top   = (ev._s / 60) * MW_ROW_H + 1
+                  const ht    = Math.max(((ev._e - ev._s) / 60) * MW_ROW_H - 2, 30)
+                  const avail = `(100% - ${taskLeft + 4}px)`
+                  const lCSS  = `calc(${taskLeft}px + ${avail} * ${ev._lane / total} + 1px)`
+                  const rCSS  = `calc(${avail} * ${(total - ev._lane - 1) / total} + 4px + 1px)`
+                  return (
+                    <div key={ev.id} onClick={ev2 => { ev2.stopPropagation(); onEventClick(ev) }} style={{ position: 'absolute', top, left: lCSS, right: rCSS, height: ht, background: c.bg, border: `1px solid ${c.border}`, borderRadius: 7, padding: '3px 7px', cursor: 'pointer', opacity: ev.done ? 0.45 : 1, overflow: 'hidden' }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: c.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: ev.done ? 'line-through' : 'none' }}>{ev.title}</div>
+                      {ht > 34 && <div style={{ fontSize: 10, fontFamily: 'Geist Mono, monospace', color: c.text, opacity: 0.7, whiteSpace: 'nowrap' }}>{ev.start}–{ev.end}</div>}
+                    </div>
+                  )
+                })}
+
+                {/* +N overflow chips */}
+                {chips.map((chip, i) => {
+                  const avail = `(100% - ${taskLeft + 4}px)`
+                  const lCSS  = `calc(${taskLeft}px + ${avail} * ${2 / 3} + 1px)`
+                  const rCSS  = `calc(${avail} * ${0 / 3} + 4px + 1px)`
+                  return (
+                    <div key={i} style={{ position: 'absolute', top: (chip.startMin / 60) * MW_ROW_H + 1, left: lCSS, right: rCSS, height: 28, background: '#16161F', border: '1px dashed #34324F', borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 600, color: '#A5A3FF', cursor: 'pointer', zIndex: 2 }}>
+                      +{chip.count}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -550,14 +1071,17 @@ function TaskSidebar({ selectedDate, events, onToggle, onDelete }) {
 export default function CalendarPage() {
   const { user } = useAuth()
   const qc = useQueryClient()
+  const isMobile = useIsMobile()
 
   const [view, setView]               = useState('week')
   const [currentDate, setCurrentDate] = useState(new Date())
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [miniDate, setMiniDate]       = useState(new Date())
   const [modalOpen, setModalOpen]     = useState(false)
+  const [popupDay, setPopupDay]       = useState(null)
   const [modalDefaults, setModalDefaults] = useState(null)
   const [taskColors, setTaskColors]   = useState(loadColors)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
 
   const { data: rawTasks = [] } = useQuery({
     queryKey: ['allTasks', user?.id],
@@ -613,16 +1137,24 @@ export default function CalendarPage() {
     },
   })
 
-  // Navigation
+  // Navigation — mobile week view moves 1 day at a time (3-day window)
   const goNext = () => {
     if (view === 'month') setCurrentDate(d => addMonths(d, 1))
+    else if (view === 'week' && isMobile) {
+      setCurrentDate(d => addWeeks(d, 1))
+      setSelectedDate(d => addWeeks(d, 1))
+    }
     else if (view === 'week') setCurrentDate(d => addWeeks(d, 1))
     else setCurrentDate(d => addDays(d, 1))
   }
   const goPrev = () => {
     if (view === 'month') setCurrentDate(d => subMonths(d, 1))
+    else if (view === 'week' && isMobile) {
+      setCurrentDate(d => subWeeks(d, 1))
+      setSelectedDate(d => subWeeks(d, 1))
+    }
     else if (view === 'week') setCurrentDate(d => subWeeks(d, 1))
-    else setCurrentDate(d => addDays(d, -1))
+    else setCurrentDate(d => addDays(d, 1))
   }
   const goToday = () => { setCurrentDate(new Date()); setSelectedDate(new Date()) }
 
@@ -673,12 +1205,14 @@ export default function CalendarPage() {
   }
 
   const visibleDays = view === 'week'
-    ? getWeekDays(currentDate)
+    ? (isMobile ? [selectedDate] : getWeekDays(currentDate))
     : view === 'day'
       ? [currentDate]
       : null
 
-  const title = headerTitle(view, currentDate)
+  const title = (isMobile && view === 'week')
+    ? format(currentDate, 'MMMM yyyy')
+    : headerTitle(view, currentDate)
 
   // Button styles
   const navBtn = {
@@ -690,72 +1224,145 @@ export default function CalendarPage() {
     transition: 'background 0.15s',
   }
 
+  const sidebarContent = (
+    <>
+      <MiniMonth
+        displayDate={miniDate}
+        onDisplayChange={setMiniDate}
+        selectedDate={selectedDate}
+        onSelectDate={handleMiniSelectDate}
+        events={events}
+      />
+      <TaskSidebar
+        selectedDate={selectedDate}
+        events={events}
+        onToggle={handleEventClick}
+        onDelete={id => deleteMutation.mutate(id)}
+      />
+    </>
+  )
+
   return (
     <div style={{
-      position: 'fixed', left: 64, top: 0, right: 0, bottom: 0,
+      position: 'fixed',
+      left: isMobile ? 0 : 64,
+      top: 0, right: 0,
+      bottom: isMobile ? 'calc(60px + env(safe-area-inset-bottom, 0px))' : 0,
       background: '#0C0C11',
       display: 'flex', flexDirection: 'column',
       overflow: 'hidden',
-      padding: '24px 28px 24px',
-      gap: 20,
+      padding: isMobile ? '12px 12px 12px' : '24px 28px 24px',
+      gap: isMobile ? 10 : 20,
     }}>
+
       {/* ── Header ── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexShrink: 0 }}>
-        {/* Left: label + title */}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 12, color: '#7A7A8E', marginBottom: 2, letterSpacing: '0.01em' }}>Calendar</div>
-          <h1 style={{ fontSize: 24, fontWeight: 600, color: '#ECECF1', margin: 0, letterSpacing: '-0.02em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {title}
-          </h1>
-        </div>
-
-        {/* Nav: prev / next / today */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-          <button onClick={goPrev} style={{ ...navBtn, width: 32, padding: 0 }} aria-label="Previous"
-            onMouseEnter={e => e.currentTarget.style.background = '#16161F'}
-            onMouseLeave={e => e.currentTarget.style.background = '#13131A'}
-          ><ChevronLeft size={16} /></button>
-
-          <button onClick={goNext} style={{ ...navBtn, width: 32, padding: 0 }} aria-label="Next"
-            onMouseEnter={e => e.currentTarget.style.background = '#16161F'}
-            onMouseLeave={e => e.currentTarget.style.background = '#13131A'}
-          ><ChevronRight size={16} /></button>
-
-          <button onClick={goToday} style={navBtn}
-            onMouseEnter={e => e.currentTarget.style.background = '#16161F'}
-            onMouseLeave={e => e.currentTarget.style.background = '#13131A'}
-          >Today</button>
-        </div>
-
-        {/* View switcher */}
-        <div style={{
-          display: 'flex', alignItems: 'center',
-          background: '#111118', borderRadius: 10,
-          border: '1px solid #1E1E29', padding: 3,
-          flexShrink: 0,
-        }}>
-          {['month','week','day'].map(v => (
+      {isMobile ? (
+        /* ── Mobile header: two rows ── */
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
+          {/* Row 1: prev/title/next + sidebar toggle */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <button onClick={goPrev} style={{ ...navBtn, width: 32, padding: 0, flexShrink: 0 }} aria-label="Previous">
+              <ChevronLeft size={16} />
+            </button>
+            <h1 style={{
+              flex: 1, textAlign: 'center',
+              fontSize: 15, fontWeight: 600, color: '#ECECF1',
+              margin: 0, letterSpacing: '-0.01em',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>{title}</h1>
+            <button onClick={goNext} style={{ ...navBtn, width: 32, padding: 0, flexShrink: 0 }} aria-label="Next">
+              <ChevronRight size={16} />
+            </button>
+            {view !== 'week' && (
+              <button
+                onClick={() => setSidebarOpen(o => !o)}
+                aria-label="Toggle sidebar"
+                style={{
+                  ...navBtn, width: 32, padding: 0, flexShrink: 0,
+                  background: sidebarOpen ? '#1D1C38' : '#13131A',
+                  color: sidebarOpen ? '#A5A3FF' : '#ECECF1',
+                }}
+              >
+                <PanelRight size={16} />
+              </button>
+            )}
+          </div>
+          {/* Row 2: view switcher + today + add */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div style={{
+              display: 'flex', alignItems: 'center',
+              background: '#111118', borderRadius: 10,
+              border: '1px solid #1E1E29', padding: 3, flexShrink: 0,
+            }}>
+              {['month','week','day'].map(v => (
+                <button key={v} onClick={() => switchView(v)} style={{
+                  height: 26, padding: '0 10px', borderRadius: 7, border: 'none',
+                  background: view === v ? '#6461F5' : 'transparent',
+                  color: view === v ? '#fff' : '#8B8B9E',
+                  fontSize: 12, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit',
+                  transition: 'background 0.15s, color 0.15s',
+                }}>
+                  {v[0].toUpperCase() + v.slice(1)}
+                </button>
+              ))}
+            </div>
+            <button onClick={goToday} style={{ ...navBtn, flexShrink: 0 }}>Today</button>
+            <div style={{ flex: 1 }} />
             <button
-              key={v}
-              onClick={() => switchView(v)}
+              onClick={() => openAddModal()}
               style={{
+                height: 34, width: 34, borderRadius: 10, border: 'none',
+                background: '#6461F5',
+                boxShadow: 'inset 0 0 0 1px #7B78FF',
+                color: '#fff', cursor: 'pointer', flexShrink: 0,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}
+            >
+              <Plus size={18} strokeWidth={2.5} />
+            </button>
+          </div>
+        </div>
+      ) : (
+        /* ── Desktop header: single row ── */
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexShrink: 0 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 12, color: '#7A7A8E', marginBottom: 2, letterSpacing: '0.01em' }}>Calendar</div>
+            <h1 style={{ fontSize: 24, fontWeight: 600, color: '#ECECF1', margin: 0, letterSpacing: '-0.02em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {title}
+            </h1>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+            <button onClick={goPrev} style={{ ...navBtn, width: 32, padding: 0 }} aria-label="Previous"
+              onMouseEnter={e => e.currentTarget.style.background = '#16161F'}
+              onMouseLeave={e => e.currentTarget.style.background = '#13131A'}
+            ><ChevronLeft size={16} /></button>
+            <button onClick={goNext} style={{ ...navBtn, width: 32, padding: 0 }} aria-label="Next"
+              onMouseEnter={e => e.currentTarget.style.background = '#16161F'}
+              onMouseLeave={e => e.currentTarget.style.background = '#13131A'}
+            ><ChevronRight size={16} /></button>
+            <button onClick={goToday} style={navBtn}
+              onMouseEnter={e => e.currentTarget.style.background = '#16161F'}
+              onMouseLeave={e => e.currentTarget.style.background = '#13131A'}
+            >Today</button>
+          </div>
+          <div style={{
+            display: 'flex', alignItems: 'center',
+            background: '#111118', borderRadius: 10,
+            border: '1px solid #1E1E29', padding: 3, flexShrink: 0,
+          }}>
+            {['month','week','day'].map(v => (
+              <button key={v} onClick={() => switchView(v)} style={{
                 height: 28, padding: '0 12px', borderRadius: 7, border: 'none',
                 background: view === v ? '#6461F5' : 'transparent',
                 color: view === v ? '#fff' : '#8B8B9E',
                 fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit',
-                transition: 'background 0.15s, color 0.15s',
-                textTransform: 'capitalize',
-              }}
-            >
-              {v.charAt(0).toUpperCase() + v.slice(1)}
-            </button>
-          ))}
-        </div>
-
-        {/* Add task */}
-        <button
-          onClick={() => openAddModal()}
-          style={{
+                transition: 'background 0.15s, color 0.15s', textTransform: 'capitalize',
+              }}>
+                {v.charAt(0).toUpperCase() + v.slice(1)}
+              </button>
+            ))}
+          </div>
+          <button onClick={() => openAddModal()} style={{
             height: 38, padding: '0 16px', borderRadius: 10, border: 'none',
             background: '#6461F5',
             boxShadow: 'inset 0 0 0 1px #7B78FF, 0 0 16px rgba(100,97,245,0.25)',
@@ -763,66 +1370,91 @@ export default function CalendarPage() {
             fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 6,
             flexShrink: 0, transition: 'background 0.15s',
           }}
-          onMouseEnter={e => e.currentTarget.style.background = '#7270FF'}
-          onMouseLeave={e => e.currentTarget.style.background = '#6461F5'}
-        >
-          <Plus size={16} strokeWidth={2.5} />
-          Add task
-        </button>
-      </div>
+            onMouseEnter={e => e.currentTarget.style.background = '#7270FF'}
+            onMouseLeave={e => e.currentTarget.style.background = '#6461F5'}
+          >
+            <Plus size={16} strokeWidth={2.5} />
+            Add task
+          </button>
+        </div>
+      )}
 
       {/* ── Body: calendar + sidebar ── */}
       <div style={{ flex: 1, display: 'flex', gap: 20, overflow: 'hidden', minHeight: 0 }}>
-        {/* Calendar panel */}
-        <div style={{
-          flex: 1, background: '#111118', border: '1px solid #1E1E29',
-          borderRadius: 16, overflow: 'hidden',
-          display: 'flex', flexDirection: 'column', minWidth: 0,
-        }}>
-          {view === 'month' && (
-            <MonthView
-              currentDate={currentDate}
-              events={events}
-              selectedDate={selectedDate}
-              onSelectDate={handleMonthSelectDate}
-              onEventClick={handleEventClick}
-              onDeleteEvent={id => deleteMutation.mutate(id)}
-              onSwitchToDay={handleDayHeaderClick}
-            />
-          )}
-          {(view === 'week' || view === 'day') && visibleDays && (
-            <TimeGrid
-              days={visibleDays}
-              events={events}
-              onSlotClick={handleSlotClick}
-              onEventClick={handleEventClick}
-              onDeleteEvent={id => deleteMutation.mutate(id)}
-              onDayHeaderClick={handleDayHeaderClick}
-            />
-          )}
-        </div>
 
-        {/* Right sidebar */}
-        <div style={{
-          width: 280, flexShrink: 0,
-          display: 'flex', flexDirection: 'column', gap: 16,
-          overflow: 'hidden',
-        }}>
-          <MiniMonth
-            displayDate={miniDate}
-            onDisplayChange={setMiniDate}
+        {isMobile && view === 'week' ? (
+          /* ── Mobile week: strip + single day grid ── */
+          <MobileWeekView
+            currentDate={currentDate}
             selectedDate={selectedDate}
-            onSelectDate={handleMiniSelectDate}
+            onSelectDate={day => { setSelectedDate(day); setCurrentDate(day) }}
+            onWeekChange={day => setCurrentDate(day)}
             events={events}
+            onEventClick={handleEventClick}
+            onSlotClick={handleSlotClick}
           />
-          <TaskSidebar
-            selectedDate={selectedDate}
-            events={events}
-            onToggle={handleEventClick}
-            onDelete={id => deleteMutation.mutate(id)}
-          />
-        </div>
+        ) : (
+          <>
+            {/* Calendar panel */}
+            <div style={{
+              flex: 1, background: '#111118', border: '1px solid #1E1E29',
+              borderRadius: 16, overflow: 'hidden',
+              display: 'flex', flexDirection: 'column', minWidth: 0,
+            }}>
+              {view === 'month' && (
+                <MonthView
+                  currentDate={currentDate}
+                  events={events}
+                  selectedDate={selectedDate}
+                  onSelectDate={handleMonthSelectDate}
+                  onEventClick={handleEventClick}
+                  onDeleteEvent={id => deleteMutation.mutate(id)}
+                  onSwitchToDay={handleDayHeaderClick}
+                />
+              )}
+              {(view === 'week' || view === 'day') && visibleDays && (
+                <TimeGrid
+                  days={visibleDays}
+                  events={events}
+                  onSlotClick={handleSlotClick}
+                  onEventClick={handleEventClick}
+                  onDeleteEvent={id => deleteMutation.mutate(id)}
+                  onDayHeaderClick={handleDayHeaderClick}
+                  onOpenDayPopup={setPopupDay}
+                />
+              )}
+            </div>
+
+            {/* Right sidebar — desktop only */}
+            {!isMobile && (
+              <div style={{ width: 280, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 16, overflow: 'hidden' }}>
+                {sidebarContent}
+              </div>
+            )}
+          </>
+        )}
       </div>
+
+      {/* ── Mobile sidebar slide-over ── */}
+      {isMobile && sidebarOpen && (
+        <>
+          <div
+            onClick={() => setSidebarOpen(false)}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 80 }}
+          />
+          <div style={{
+            position: 'fixed', top: 0, right: 0, bottom: 0,
+            width: '82vw', maxWidth: 300,
+            background: '#111118', borderLeft: '1px solid #1E1E29',
+            zIndex: 81, display: 'flex', flexDirection: 'column', gap: 16,
+            padding: 16,
+            paddingBottom: 'calc(60px + env(safe-area-inset-bottom, 0px))',
+            overflowY: 'auto',
+          }}>
+            {sidebarContent}
+          </div>
+        </>
+      )}
 
       {/* Modal */}
       <TaskModal
@@ -832,6 +1464,18 @@ export default function CalendarPage() {
         modalTitle="New task"
         defaultValues={modalDefaults}
       />
+
+      {/* Day detail popup / bottom sheet */}
+      {popupDay && (
+        <DayDetailPopup
+          dayStr={popupDay}
+          events={events}
+          onClose={() => setPopupDay(null)}
+          onEventClick={handleEventClick}
+          onDeleteEvent={id => { deleteMutation.mutate(id) }}
+          onSwitchToDay={day => { handleDayHeaderClick(day); setPopupDay(null) }}
+        />
+      )}
     </div>
   )
 }

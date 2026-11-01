@@ -4,6 +4,7 @@ import { logout } from '../../api/auth'
 import { useAuth } from '../../context/AuthContext'
 import { LayoutDashboard, CalendarDays, LogOut, CheckSquare } from 'lucide-react'
 import api from '../../api/axios'
+import { useIsMobile } from '../../hooks/useIsMobile'
 
 const nav = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -40,6 +41,7 @@ const S = {
 export default function Sidebar() {
   const { user, setUser } = useAuth()
   const navigate = useNavigate()
+  const isMobile = useIsMobile()
   const [avatarUrl, setAvatarUrl] = useState(null)
 
   useEffect(() => {
@@ -59,6 +61,8 @@ export default function Sidebar() {
     setUser(null)
     navigate('/login')
   }
+
+  if (isMobile) return null
 
   return (
     <aside style={S.rail} aria-label="Main navigation">

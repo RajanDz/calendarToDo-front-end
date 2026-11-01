@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { X } from 'lucide-react'
+import { useIsMobile } from '../../hooks/useIsMobile'
 
 const COLORS = {
   indigo:  { dot: '#7C7AFF', ring: '#6461F5' },
@@ -78,6 +79,7 @@ const S = {
 export default function TaskModal({ open, onClose, onSubmit, defaultValues, modalTitle = 'New task' }) {
   const { register, handleSubmit, reset, watch, setValue, formState: { isSubmitting } } = useForm()
   const [color, setColor] = useState(defaultValues?.color || 'indigo')
+  const isMobile = useIsMobile()
   const title = watch('name', '')
 
   useEffect(() => {
@@ -129,10 +131,32 @@ export default function TaskModal({ open, onClose, onSubmit, defaultValues, moda
     })
   }
 
+  const cardStyle = isMobile
+    ? {
+        position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 201,
+        background: '#14141C',
+        borderRadius: '18px 18px 0 0',
+        border: '1px solid #262633',
+        borderBottom: 'none',
+        boxShadow: '0 -8px 40px rgba(0,0,0,0.6)',
+        padding: '0 20px 0',
+        paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+      }
+    : S.card
+
+  const backdropStyle = isMobile
+    ? { ...S.backdrop, alignItems: 'flex-end' }
+    : S.backdrop
+
   return (
-    <div style={S.backdrop} onClick={onClose}>
-      <div style={S.card} onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={modalTitle}>
-        <div style={S.header}>
+    <div style={backdropStyle} onClick={onClose}>
+      <div style={cardStyle} onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={modalTitle}>
+        {isMobile && (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '12px 0 4px' }}>
+            <div style={{ width: 36, height: 4, borderRadius: 2, background: '#2E2E3E' }} />
+          </div>
+        )}
+        <div style={{ ...S.header, marginTop: isMobile ? 8 : 0 }}>
           <span style={S.title}>{modalTitle}</span>
           <button style={S.closeBtn} onClick={onClose} aria-label="Close"
             onMouseEnter={e => e.currentTarget.style.background = '#1B1B25'}
@@ -142,7 +166,7 @@ export default function TaskModal({ open, onClose, onSubmit, defaultValues, moda
           </button>
         </div>
 
-        <form onSubmit={handleSubmit(submit)}>
+        <form onSubmit={handleSubmit(submit)} style={{ paddingBottom: isMobile ? 16 : 0 }}>
           {/* Task name */}
           <div style={{ marginBottom: 16 }}>
             <label style={S.label}>Task name</label>
