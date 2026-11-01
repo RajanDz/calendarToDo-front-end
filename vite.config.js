@@ -7,6 +7,9 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     port: 5500,
+    fs: {
+      allow: ['C:/Users/Rajan44/OneDrive/Desktop/calendar-data'],
+    },
   },
   resolve: {
     alias: {

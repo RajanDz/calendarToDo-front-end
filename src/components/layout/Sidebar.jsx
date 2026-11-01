@@ -1,7 +1,9 @@
 import { NavLink, useNavigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
 import { logout } from '../../api/auth'
 import { useAuth } from '../../context/AuthContext'
 import { LayoutDashboard, CalendarDays, LogOut, CheckSquare } from 'lucide-react'
+import api from '../../api/axios'
 
 const nav = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -27,7 +29,6 @@ const S = {
     display: 'flex', flexDirection: 'column', gap: 4,
     flex: 1, width: '100%', padding: '16px 12px 0',
   },
-  logoutWrap: { padding: '0 12px' },
   logout: {
     width: '100%', height: 40, borderRadius: 10, border: 'none',
     background: 'transparent', color: '#6F6F82',
@@ -37,8 +38,21 @@ const S = {
 }
 
 export default function Sidebar() {
-  const { setUser } = useAuth()
+  const { user, setUser } = useAuth()
   const navigate = useNavigate()
+  const [avatarUrl, setAvatarUrl] = useState(null)
+
+  useEffect(() => {
+    api.get('/api/userProfileImg')
+      .then(res => {
+        const filename = (typeof res.data === 'string' ? res.data.trim() : '').replace(/^\//, '')
+        if (filename) setAvatarUrl(`http://localhost:8080/uploads/${filename}`)
+      })
+      .catch(() => setAvatarUrl(null))
+  }, [])
+
+  const initials = [user?.firstname, user?.lastname]
+    .filter(Boolean).map(n => n[0].toUpperCase()).join('')
 
   const handleLogout = async () => {
     await logout()
@@ -74,7 +88,28 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      <div style={S.logoutWrap}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '0 12px' }}>
+        {/* Profile avatar */}
+        <NavLink
+          to="/profile"
+          title="Profile"
+          aria-label="Profile"
+          style={({ isActive }) => ({
+            width: 40, height: 40, borderRadius: 12,
+            border: `2px solid ${isActive ? '#6461F5' : '#2A2950'}`,
+            overflow: 'hidden', flexShrink: 0, display: 'flex',
+            alignItems: 'center', justifyContent: 'center',
+            background: '#1D1C38', cursor: 'pointer', textDecoration: 'none',
+            transition: 'border-color 0.15s',
+          })}
+        >
+          {avatarUrl ? (
+            <img src={avatarUrl} alt="Profile" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+          ) : (
+            <span style={{ fontSize: 13, fontWeight: 600, color: '#7C7AFF' }}>{initials || '?'}</span>
+          )}
+        </NavLink>
+
         <button
           onClick={handleLogout}
           title="Log out"

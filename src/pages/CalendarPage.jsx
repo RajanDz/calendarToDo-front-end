@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   format, startOfWeek, endOfWeek, startOfMonth,
@@ -6,7 +6,7 @@ import {
   isSameDay, isSameMonth, isToday,
 } from 'date-fns'
 import { ChevronLeft, ChevronRight, Plus } from 'lucide-react'
-import { getAllTasks, createTask, editTask, createRepeatedTask } from '../api/tasks'
+import { getAllTasks, createTask, editTask, deleteTask, createRepeatedTask } from '../api/tasks'
 import TaskModal from '../components/tasks/TaskModal'
 import { useAuth } from '../context/AuthContext'
 
@@ -70,17 +70,20 @@ function headerTitle(view, date) {
 }
 
 // ─── EventBlock (time-grid) ──────────────────────────────────────────────────
-function EventBlock({ ev, onClick }) {
+function EventBlock({ ev, onClick, onDelete }) {
   const c = PALETTE[ev.color] || PALETTE.indigo
   const startMin = parseMin(ev.start)
   const endMin   = parseMin(ev.end)
   const durMin   = Math.max(endMin - startMin, 20)
   const top    = (startMin / 60) * ROW_H + 2
   const height = Math.max((durMin / 60) * ROW_H - 4, (20 / 60) * ROW_H)
+  const [hovered, setHovered] = useState(false)
 
   return (
     <div
       onClick={e => { e.stopPropagation(); onClick(ev) }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       style={{
         position: 'absolute', top, left: 4, right: 4, height,
         background: c.bg, border: `1px solid ${c.border}`,
@@ -94,8 +97,24 @@ function EventBlock({ ev, onClick }) {
         <span style={{
           color: c.text, fontSize: 12.5, fontWeight: 600,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          flex: 1,
           textDecoration: ev.done ? 'line-through' : 'none',
         }}>{ev.title}</span>
+        {hovered && (
+          <button
+            onClick={e => { e.stopPropagation(); onDelete(ev.rawId) }}
+            aria-label={`Delete ${ev.title}`}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: 18, height: 18, borderRadius: 4, border: 'none', flexShrink: 0,
+              background: 'rgba(251,113,153,0.15)', color: '#FB7199', cursor: 'pointer', padding: 0,
+            }}
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+            </svg>
+          </button>
+        )}
       </div>
       {height > 34 && (
         <div style={{ color: c.text, opacity: 0.7, fontSize: 11, fontFamily: 'Geist Mono, monospace' }}>
@@ -107,7 +126,7 @@ function EventBlock({ ev, onClick }) {
 }
 
 // ─── TimeGrid (Week / Day) ───────────────────────────────────────────────────
-function TimeGrid({ days, events, onSlotClick, onEventClick, onDayHeaderClick }) {
+function TimeGrid({ days, events, onSlotClick, onEventClick, onDeleteEvent, onDayHeaderClick }) {
   const scrollRef = useRef(null)
   const [nowMin, setNowMin] = useState(() => {
     const n = new Date(); return n.getHours() * 60 + n.getMinutes()
@@ -217,7 +236,7 @@ function TimeGrid({ days, events, onSlotClick, onEventClick, onDayHeaderClick })
 
                 {/* Events */}
                 {dayEvts.map(ev => (
-                  <EventBlock key={ev.id} ev={ev} onClick={onEventClick} />
+                  <EventBlock key={ev.id} ev={ev} onClick={onEventClick} onDelete={onDeleteEvent} />
                 ))}
 
                 {/* Now line */}
@@ -240,12 +259,54 @@ function TimeGrid({ days, events, onSlotClick, onEventClick, onDayHeaderClick })
   )
 }
 
+// ─── MonthChip ───────────────────────────────────────────────────────────────
+function MonthChip({ ev, c, onEventClick, onDeleteEvent }) {
+  const [hovered, setHovered] = useState(false)
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 4,
+        padding: '2px 5px', borderRadius: 4, marginBottom: 2,
+        background: c.bg, overflow: 'hidden', cursor: 'pointer',
+        position: 'relative',
+      }}
+    >
+      <div
+        onClick={e => { e.stopPropagation(); onEventClick(ev) }}
+        style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}
+      >
+        <div style={{ width: 4, height: 4, borderRadius: '50%', background: c.dot, flexShrink: 0 }} />
+        <span style={{ color: c.text, fontSize: 11, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+          {ev.title}
+        </span>
+      </div>
+      {hovered && (
+        <button
+          onClick={e => { e.stopPropagation(); onDeleteEvent(ev.rawId) }}
+          aria-label={`Delete ${ev.title}`}
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            width: 14, height: 14, borderRadius: 3, border: 'none', flexShrink: 0,
+            background: 'rgba(251,113,153,0.2)', color: '#FB7199', cursor: 'pointer', padding: 0,
+          }}
+        >
+          <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      )}
+    </div>
+  )
+}
+
 // ─── MonthView ───────────────────────────────────────────────────────────────
 const WDAY_LABELS = WK_START === 0
   ? ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
   : ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
 
-function MonthView({ currentDate, events, selectedDate, onSelectDate, onEventClick, onSwitchToDay }) {
+function MonthView({ currentDate, events, selectedDate, onSelectDate, onEventClick, onDeleteEvent, onSwitchToDay }) {
   const monthStart = startOfMonth(currentDate)
   const gridStart  = startOfWeek(monthStart, { weekStartsOn: WK_START })
   const days = (() => {
@@ -301,20 +362,7 @@ function MonthView({ currentDate, events, selectedDate, onSelectDate, onEventCli
               {dayEvts.slice(0, 3).map(ev => {
                 const c = PALETTE[ev.color] || PALETTE.indigo
                 return (
-                  <div
-                    key={ev.id}
-                    onClick={e => { e.stopPropagation(); onEventClick(ev) }}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 4,
-                      padding: '2px 5px', borderRadius: 4, marginBottom: 2,
-                      background: c.bg, overflow: 'hidden', cursor: 'pointer',
-                    }}
-                  >
-                    <div style={{ width: 4, height: 4, borderRadius: '50%', background: c.dot, flexShrink: 0 }} />
-                    <span style={{ color: c.text, fontSize: 11, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {ev.title}
-                    </span>
-                  </div>
+                  <MonthChip key={ev.id} ev={ev} c={c} onEventClick={onEventClick} onDeleteEvent={onDeleteEvent} />
                 )
               })}
 
@@ -396,8 +444,73 @@ function MiniMonth({ displayDate, onDisplayChange, selectedDate, onSelectDate, e
   )
 }
 
+// ─── SidebarTaskRow ───────────────────────────────────────────────────────────
+function SidebarTaskRow({ ev, c, onToggle, onDelete }) {
+  const [hovered, setHovered] = useState(false)
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8,
+        padding: '8px 10px', borderRadius: 10,
+        background: '#13131A', border: '1px solid #1E1E29',
+      }}
+    >
+      <button
+        onClick={() => onToggle(ev)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 10,
+          flex: 1, minWidth: 0, border: 'none', background: 'transparent',
+          cursor: 'pointer', padding: 0, textAlign: 'left', fontFamily: 'inherit',
+        }}
+      >
+        <div style={{
+          width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
+          border: `2px solid ${c.dot}`,
+          background: ev.done ? c.dot : 'transparent',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          {ev.done && (
+            <svg width="10" height="8" viewBox="0 0 10 8" fill="none">
+              <path d="M1 4L3.5 6.5L9 1" stroke="#0C0C11" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          )}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            fontSize: 13, fontWeight: 500, color: '#ECECF1',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            textDecoration: ev.done ? 'line-through' : 'none',
+            opacity: ev.done ? 0.5 : 1,
+          }}>{ev.title}</div>
+          <div style={{ fontSize: 11, color: '#6F6F82', fontFamily: 'Geist Mono, monospace' }}>
+            {ev.start} – {ev.end}
+          </div>
+        </div>
+      </button>
+      <button
+        onClick={() => onDelete(ev.rawId)}
+        aria-label={`Delete ${ev.title}`}
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          width: 26, height: 26, borderRadius: 7, border: 'none', flexShrink: 0,
+          background: 'transparent', color: '#5C5C70', cursor: 'pointer',
+          opacity: hovered ? 1 : 0, transition: 'opacity 0.15s, color 0.15s, background 0.15s',
+        }}
+        onMouseEnter={e => { e.currentTarget.style.color = '#FB7199'; e.currentTarget.style.background = '#2A1520' }}
+        onMouseLeave={e => { e.currentTarget.style.color = '#5C5C70'; e.currentTarget.style.background = 'transparent' }}
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+        </svg>
+      </button>
+    </div>
+  )
+}
+
 // ─── TaskSidebar ─────────────────────────────────────────────────────────────
-function TaskSidebar({ selectedDate, events, onToggle }) {
+function TaskSidebar({ selectedDate, events, onToggle, onDelete }) {
   const dayStr   = format(selectedDate, 'yyyy-MM-dd')
   const dayEvts  = events.filter(e => e.date === dayStr)
   const doneN    = dayEvts.filter(e => e.done).length
@@ -424,43 +537,7 @@ function TaskSidebar({ selectedDate, events, onToggle }) {
           dayEvts.map(ev => {
             const c = PALETTE[ev.color] || PALETTE.indigo
             return (
-              <div
-                key={ev.id}
-                onClick={() => onToggle(ev)}
-                role="button"
-                tabIndex={0}
-                onKeyDown={e => e.key === 'Enter' && onToggle(ev)}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 10,
-                  padding: '8px 10px', borderRadius: 10,
-                  background: '#13131A', border: '1px solid #1E1E29',
-                  cursor: 'pointer',
-                }}
-              >
-                <div style={{
-                  width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
-                  border: `2px solid ${c.dot}`,
-                  background: ev.done ? c.dot : 'transparent',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}>
-                  {ev.done && (
-                    <svg width="10" height="8" viewBox="0 0 10 8" fill="none">
-                      <path d="M1 4L3.5 6.5L9 1" stroke="#0C0C11" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  )}
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{
-                    fontSize: 13, fontWeight: 500, color: '#ECECF1',
-                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    textDecoration: ev.done ? 'line-through' : 'none',
-                    opacity: ev.done ? 0.5 : 1,
-                  }}>{ev.title}</div>
-                  <div style={{ fontSize: 11, color: '#6F6F82', fontFamily: 'Geist Mono, monospace' }}>
-                    {ev.start} – {ev.end}
-                  </div>
-                </div>
-              </div>
+              <SidebarTaskRow key={ev.id} ev={ev} c={c} onToggle={onToggle} onDelete={onDelete} />
             )
           })
         )}
@@ -516,6 +593,11 @@ export default function CalendarPage() {
       timeOfEnd: ev.raw.timeOfEnd,
       status: ev.done ? 'pending' : 'done',
     }),
+    onSuccess: invalidate,
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (taskId) => deleteTask(taskId),
     onSuccess: invalidate,
   })
 
@@ -704,6 +786,7 @@ export default function CalendarPage() {
               selectedDate={selectedDate}
               onSelectDate={handleMonthSelectDate}
               onEventClick={handleEventClick}
+              onDeleteEvent={id => deleteMutation.mutate(id)}
               onSwitchToDay={handleDayHeaderClick}
             />
           )}
@@ -713,6 +796,7 @@ export default function CalendarPage() {
               events={events}
               onSlotClick={handleSlotClick}
               onEventClick={handleEventClick}
+              onDeleteEvent={id => deleteMutation.mutate(id)}
               onDayHeaderClick={handleDayHeaderClick}
             />
           )}
@@ -735,6 +819,7 @@ export default function CalendarPage() {
             selectedDate={selectedDate}
             events={events}
             onToggle={handleEventClick}
+            onDelete={id => deleteMutation.mutate(id)}
           />
         </div>
       </div>

@@ -1,71 +1,520 @@
-import { useState } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { format, isToday, parseISO } from 'date-fns'
-import {
-  getUpcomingTask,
-  getTasksByDate,
-  getTasksForNext7Days,
-  createTask,
-  createRepeatedTask,
-  deleteTask,
-  editTask,
-} from '../api/tasks'
+import { format, isToday, parseISO, startOfWeek, addDays } from 'date-fns'
+import { useNavigate } from 'react-router-dom'
+import { CalendarDays, Plus, Check, Flag, SlidersHorizontal, Trash2 } from 'lucide-react'
+import { getAllTasks, createTask, editTask, deleteTask } from '../api/tasks'
 import { useAuth } from '../context/AuthContext'
-import TaskCard from '../components/tasks/TaskCard'
 import TaskModal from '../components/tasks/TaskModal'
-import { Plus, Clock, CalendarDays, Zap } from 'lucide-react'
+
+// ─── Color / category palette ─────────────────────────────────────────────────
+
+const PALETTE = {
+  indigo:  { bg: '#1F1E44', border: '#34327A', text: '#CFCEFF', dot: '#7C7AFF', name: 'Faculty' },
+  emerald: { bg: '#102B24', border: '#1D5040', text: '#A6ECD0', dot: '#34D399', name: 'Health' },
+  amber:   { bg: '#2E2410', border: '#584418', text: '#F7D999', dot: '#F5B83D', name: 'Personal' },
+  rose:    { bg: '#341624', border: '#5E2539', text: '#FFBFD0', dot: '#FB7199', name: 'Deadline' },
+  sky:     { bg: '#0E2836', border: '#1A4860', text: '#B0E2FA', dot: '#38BDF8', name: 'Lectures' },
+}
+
+function getStoredColors() {
+  try { return JSON.parse(localStorage.getItem('calTaskColors') || '{}') } catch { return {} }
+}
+function getTaskColor(id) {
+  return getStoredColors()[String(id)] || 'indigo'
+}
+
+// ─── Pure helpers ─────────────────────────────────────────────────────────────
+
+function getGreeting(name) {
+  const h = new Date().getHours()
+  const g = h < 5 ? 'Good night' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'
+  return name ? `${g}, ${name}` : g
+}
+
+function timeToMin(t) {
+  if (!t) return null
+  const [h, m] = t.substring(0, 5).split(':').map(Number)
+  return h * 60 + m
+}
+
+function parseQuickAdd(text) {
+  const rx = /\b(\d{1,2})[:.h](\d{2})\b/
+  const m = text.match(rx)
+  if (!m) return { title: text.trim(), start: null, end: null }
+  const h = +m[1], min = +m[2]
+  if (h > 23 || min > 59) return { title: text.trim(), start: null, end: null }
+  const start = `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`
+  const em = (h * 60 + min + 60) % 1440
+  const end = `${String(Math.floor(em / 60)).padStart(2, '0')}:${String(em % 60).padStart(2, '0')}`
+  return { title: text.replace(rx, '').replace(/\s+/g, ' ').trim(), start, end }
+}
+
+function fmtDuration(startMin, endMin) {
+  const d = endMin - startMin
+  if (d <= 0) return ''
+  const h = Math.floor(d / 60), m = d % 60
+  return h && m ? `${h}h ${m}m` : h ? `${h}h` : `${m}m`
+}
+
+function calcStreak(tasks) {
+  const byDate = {}
+  tasks.forEach(t => { (byDate[t.dateOfStart] ??= []).push(t) })
+  let streak = 0
+  const d = new Date()
+  d.setDate(d.getDate() - 1)
+  for (let i = 0; i < 365; i++) {
+    const key = format(d, 'yyyy-MM-dd')
+    const day = byDate[key]
+    if (!day?.length || !day.every(t => t.status === 'done')) break
+    streak++
+    d.setDate(d.getDate() - 1)
+  }
+  return streak
+}
+
+function isAnytime(t) {
+  return !t.timeOfStart || t.timeOfStart === '00:00:00' || t.timeOfStart === '00:00'
+}
+
+// ─── Shared card shell ────────────────────────────────────────────────────────
+
+function Card({ children, style }) {
+  return (
+    <div style={{ background: '#111118', border: '1px solid #1E1E29', borderRadius: 16, padding: 18, ...style }}>
+      {children}
+    </div>
+  )
+}
+
+// ─── Day card (week strip) ────────────────────────────────────────────────────
+
+function DayCard({ date, tasks, selected, onClick }) {
+  const isT = isToday(parseISO(date))
+  const done = tasks.filter(t => t.status === 'done').length
+  const total = tasks.length
+  const pct = total ? (done / total) * 100 : 0
+  return (
+    <button
+      onClick={onClick}
+      aria-label={`${isT ? 'Today' : format(parseISO(date), 'EEEE')} ${format(parseISO(date), 'MMM d')}`}
+      style={{
+        background: selected ? '#1D1C38' : '#111118',
+        border: `1px solid ${selected ? '#6461F5' : '#1E1E29'}`,
+        borderRadius: 12, padding: '12px 12px 10px',
+        cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit',
+        display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0,
+        transition: 'background 0.15s, border-color 0.15s',
+      }}
+      onMouseEnter={e => { if (!selected) e.currentTarget.style.borderColor = '#34327A' }}
+      onMouseLeave={e => { if (!selected) e.currentTarget.style.borderColor = '#1E1E29' }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ fontSize: 11, fontWeight: 500, letterSpacing: '0.06em', textTransform: 'uppercase', color: selected ? '#A5A3FF' : '#6F6F82' }}>
+          {isT ? 'Today' : format(parseISO(date), 'EEE')}
+        </span>
+        <span style={{ fontSize: 11, color: '#6F6F82', fontFamily: 'Geist Mono, monospace' }}>
+          {total ? `${done}/${total}` : '–'}
+        </span>
+      </div>
+      <span style={{ fontSize: 20, fontWeight: 600, lineHeight: 1, color: selected ? '#ECECF1' : '#9E9EAF' }}>
+        {format(parseISO(date), 'd')}
+      </span>
+      <div style={{ height: 4, borderRadius: 2, background: selected ? '#2A2950' : '#1A1A24' }}>
+        <div style={{ height: '100%', borderRadius: 2, width: `${pct}%`, background: selected ? '#7C7AFF' : '#4A4890', transition: 'width 0.3s' }} />
+      </div>
+    </button>
+  )
+}
+
+// ─── Up-next hero card ────────────────────────────────────────────────────────
+
+function UpNextCard({ task, countdown, color, onMarkDone }) {
+  const pal = PALETTE[color] || PALETTE.indigo
+  return (
+    <div style={{ background: '#111118', border: '1px solid #1E1E29', borderRadius: 16, overflow: 'hidden', display: 'flex' }}>
+      <div style={{ width: 4, background: pal.dot, flexShrink: 0 }} />
+      <div style={{ padding: 18, flex: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+          <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#A5A3FF' }}>
+            {countdown.label}
+          </span>
+          {countdown.pill && (
+            <span style={{
+              fontSize: 11, padding: '2px 8px', borderRadius: 20,
+              background: countdown.running ? pal.bg : '#1A1A28',
+              border: `1px solid ${countdown.running ? pal.border : '#2A2A3A'}`,
+              color: countdown.running ? pal.text : '#8B8B9E',
+              fontFamily: 'Geist Mono, monospace',
+            }}>{countdown.pill}</span>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+          <div>
+            <p style={{ fontSize: 22, fontWeight: 600, color: '#ECECF1', margin: '0 0 6px' }}>{task.name}</p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 13, color: '#8B8B9E', fontFamily: 'Geist Mono, monospace' }}>
+                {task.timeOfStart?.substring(0, 5)} – {task.timeOfEnd?.substring(0, 5)}
+              </span>
+              <span style={{ width: 3, height: 3, borderRadius: '50%', background: pal.dot, display: 'inline-block' }} />
+              <span style={{ fontSize: 13, color: '#6F6F82' }}>{pal.name}</span>
+            </div>
+          </div>
+          <button
+            onClick={onMarkDone}
+            aria-label="Mark done"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6, height: 34, padding: '0 12px',
+              borderRadius: 8, background: '#1A1A28', border: '1px solid #2A2A3A',
+              color: '#8B8B9E', fontSize: 13, fontWeight: 500, cursor: 'pointer',
+              fontFamily: 'inherit', flexShrink: 0, transition: 'border-color 0.15s, color 0.15s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = '#34D399'; e.currentTarget.style.color = '#34D399' }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = '#2A2A3A'; e.currentTarget.style.color = '#8B8B9E' }}
+          >
+            <Check size={14} />
+            Mark done
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Task row ─────────────────────────────────────────────────────────────────
+
+function TaskRow({ task, onToggle, onDelete }) {
+  const pal = PALETTE[getTaskColor(task.id)] || PALETTE.indigo
+  const done = task.status === 'done'
+  const hasTime = !isAnytime(task)
+  const [hovered, setHovered] = useState(false)
+  return (
+    <div
+      style={{ display: 'flex', alignItems: 'center', borderRadius: 10, transition: 'background 0.12s', background: hovered ? '#16161F' : 'transparent' }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <button
+        onClick={() => onToggle(task)}
+        aria-label={`Toggle ${task.name}`}
+        style={{
+          flex: 1, display: 'flex', alignItems: 'center', gap: 10, minWidth: 0,
+          padding: '10px 8px', borderRadius: 10, border: 'none',
+          background: 'transparent', cursor: 'pointer', textAlign: 'left',
+          fontFamily: 'inherit',
+        }}
+      >
+        <div style={{
+          width: 18, height: 18, borderRadius: 5, flexShrink: 0,
+          border: `1.5px solid ${pal.dot}`, background: done ? pal.dot : 'transparent',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          transition: 'background 0.15s',
+        }}>
+          {done && <Check size={11} color="#0C0C11" strokeWidth={3} />}
+        </div>
+        <span style={{
+          flex: 1, fontSize: 13.5, fontWeight: 500, overflow: 'hidden',
+          textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          color: done ? '#6F6F82' : '#ECECF1',
+          textDecoration: done ? 'line-through' : 'none',
+          transition: 'color 0.15s',
+        }}>{task.name}</span>
+        {task.urgent && !done && <Flag size={13} color="#FB7199" />}
+        <span style={{
+          fontSize: 11, padding: '2px 7px', borderRadius: 20, flexShrink: 0,
+          background: pal.bg, color: pal.text,
+        }}>{pal.name}</span>
+        <span style={{
+          width: 92, textAlign: 'right', flexShrink: 0,
+          fontSize: 12, color: '#6F6F82', fontFamily: 'Geist Mono, monospace',
+        }}>
+          {hasTime ? `${task.timeOfStart?.substring(0, 5)} – ${task.timeOfEnd?.substring(0, 5)}` : 'Anytime'}
+        </span>
+      </button>
+      <button
+        onClick={() => onDelete(task.id)}
+        aria-label={`Delete ${task.name}`}
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          width: 28, height: 28, borderRadius: 7, border: 'none',
+          background: 'transparent', cursor: 'pointer', flexShrink: 0,
+          marginRight: 4, color: '#5C5C70',
+          opacity: hovered ? 1 : 0, transition: 'opacity 0.15s, color 0.15s, background 0.15s',
+        }}
+        onMouseEnter={e => { e.currentTarget.style.color = '#FB7199'; e.currentTarget.style.background = '#2A1520' }}
+        onMouseLeave={e => { e.currentTarget.style.color = '#5C5C70'; e.currentTarget.style.background = 'transparent' }}
+      >
+        <Trash2 size={13} />
+      </button>
+    </div>
+  )
+}
+
+// ─── Task list card ───────────────────────────────────────────────────────────
+
+function TaskListCard({ title, done, total, scheduled, anytime, onToggle, onDelete }) {
+  return (
+    <Card>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+        <p style={{ fontSize: 15, fontWeight: 600, color: '#ECECF1', margin: 0 }}>{title}</p>
+        <span style={{ fontSize: 12, color: '#6F6F82', fontFamily: 'Geist Mono, monospace' }}>
+          {done}/{total} done
+        </span>
+      </div>
+      {total === 0 ? (
+        <div style={{ border: '1px dashed #2A2A3A', borderRadius: 10, padding: '24px 0', textAlign: 'center', color: '#5C5C70', fontSize: 13 }}>
+          Nothing planned. Add a task above.
+        </div>
+      ) : (
+        <>
+          {scheduled.length > 0 && (
+            <div style={{ marginBottom: anytime.length > 0 ? 10 : 0 }}>
+              <p style={{ fontSize: 10, fontWeight: 600, color: '#5C5C70', letterSpacing: '0.08em', textTransform: 'uppercase', margin: '0 0 4px 8px' }}>
+                Scheduled
+              </p>
+              {scheduled.map(t => <TaskRow key={t.id} task={t} onToggle={onToggle} onDelete={onDelete} />)}
+            </div>
+          )}
+          {anytime.length > 0 && (
+            <div>
+              <p style={{ fontSize: 10, fontWeight: 600, color: '#5C5C70', letterSpacing: '0.08em', textTransform: 'uppercase', margin: '0 0 4px 8px' }}>
+                Anytime
+              </p>
+              {anytime.map(t => <TaskRow key={t.id} task={t} onToggle={onToggle} onDelete={onDelete} />)}
+            </div>
+          )}
+        </>
+      )}
+    </Card>
+  )
+}
+
+// ─── Progress card ────────────────────────────────────────────────────────────
+
+function ProgressCard({ done, total, streak }) {
+  const r = 34, sw = 7
+  const circ = 2 * Math.PI * r
+  const pct = total ? done / total : 0
+  const offset = circ * (1 - pct)
+  const label = total ? `${Math.round(pct * 100)}%` : '–'
+
+  return (
+    <Card>
+      <p style={{ fontSize: 15, fontWeight: 600, color: '#ECECF1', margin: '0 0 14px' }}>Progress</p>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        <svg width="76" height="76" style={{ transform: 'rotate(-90deg)', flexShrink: 0 }} aria-hidden="true">
+          <circle cx="38" cy="38" r={r} fill="none" stroke="#1D1C38" strokeWidth={sw} />
+          {total > 0 && (
+            <circle cx="38" cy="38" r={r} fill="none" stroke="#6461F5" strokeWidth={sw}
+              strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round"
+              style={{ transition: 'stroke-dashoffset 0.4s' }} />
+          )}
+          <text x="38" y="38" textAnchor="middle" dominantBaseline="central"
+            fill="#ECECF1" fontSize="13" fontWeight="600" fontFamily="Geist, sans-serif"
+            style={{ transform: 'rotate(90deg)', transformOrigin: '38px 38px' }}>
+            {label}
+          </text>
+        </svg>
+        <div>
+          <p style={{ fontSize: 14, fontWeight: 500, color: '#ECECF1', margin: '0 0 4px' }}>
+            {total ? `${done} of ${total} done today` : 'No tasks today'}
+          </p>
+          <p style={{ fontSize: 12, color: '#6F6F82', margin: 0 }}>
+            {streak > 0 ? `${streak}-day streak of finished days` : 'Finish today to start a streak'}
+          </p>
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+// ─── Schedule card ────────────────────────────────────────────────────────────
+
+function ScheduleCard({ tasks, now }) {
+  const navigate = useNavigate()
+  const sorted = [...tasks].sort((a, b) => (a.timeOfStart || '').localeCompare(b.timeOfStart || ''))
+  const nowMin = now.getHours() * 60 + now.getMinutes()
+
+  return (
+    <Card>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+        <p style={{ fontSize: 15, fontWeight: 600, color: '#ECECF1', margin: 0 }}>Schedule</p>
+        <button onClick={() => navigate('/calendar')} style={{ background: 'none', border: 'none', color: '#6461F5', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', padding: 0 }}>
+          View week
+        </button>
+      </div>
+      {sorted.length === 0 ? (
+        <p style={{ fontSize: 13, color: '#5C5C70', margin: 0 }}>No scheduled tasks today.</p>
+      ) : (
+        <div>
+          {sorted.map((task, i) => {
+            const pal = PALETTE[getTaskColor(task.id)] || PALETTE.indigo
+            const done = task.status === 'done'
+            const sMin = timeToMin(task.timeOfStart)
+            const eMin = timeToMin(task.timeOfEnd)
+            const isLive = sMin != null && eMin != null && nowMin >= sMin && nowMin < eMin
+            const isPast = eMin != null && nowMin >= eMin
+            const dimmed = (isPast || done) && !isLive
+            const isLast = i === sorted.length - 1
+
+            return (
+              <div key={task.id} style={{ display: 'grid', gridTemplateColumns: '44px 14px 1fr', columnGap: 8, opacity: dimmed ? 0.5 : 1, transition: 'opacity 0.2s' }}>
+                <div style={{ textAlign: 'right', paddingTop: 2 }}>
+                  <span style={{ fontSize: 12, fontFamily: 'Geist Mono, monospace', color: isLive ? pal.dot : '#6F6F82', fontWeight: isLive ? 600 : 400 }}>
+                    {task.timeOfStart?.substring(0, 5)}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  <div style={{
+                    width: 10, height: 10, borderRadius: '50%', flexShrink: 0, marginTop: 3,
+                    background: isLive || done ? pal.dot : 'transparent',
+                    border: `2px solid ${pal.dot}`,
+                    boxShadow: isLive ? `0 0 0 3px ${pal.bg}` : 'none',
+                  }} />
+                  {!isLast && <div style={{ width: 1.5, flex: 1, background: '#1F1F2A', margin: '3px 0 0' }} />}
+                </div>
+                <div style={{ paddingBottom: isLast ? 0 : 14, minWidth: 0 }}>
+                  <p style={{ fontSize: 13, fontWeight: 500, color: '#ECECF1', margin: '0 0 2px', textDecoration: done ? 'line-through' : 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {task.name}
+                  </p>
+                  <p style={{ fontSize: 11.5, color: '#6F6F82', margin: 0 }}>
+                    {sMin != null && eMin != null ? `${fmtDuration(sMin, eMin)} · ` : ''}{pal.name}
+                  </p>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </Card>
+  )
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
   const { user } = useAuth()
+  const navigate = useNavigate()
   const qc = useQueryClient()
-  const today = format(new Date(), 'yyyy-MM-dd')
-  const [selectedDate, setSelectedDate] = useState(today)
+
+  const todayStr = format(new Date(), 'yyyy-MM-dd')
+  const [selectedDate, setSelectedDate] = useState(todayStr)
+  const [quickAdd, setQuickAdd] = useState('')
+  const [qaFocused, setQaFocused] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
+  const [modalDefaults, setModalDefaults] = useState(null)
   const [editingTask, setEditingTask] = useState(null)
+  const [now, setNow] = useState(new Date())
 
-  const { data: upcoming } = useQuery({
-    queryKey: ['upcomingTask'],
-    queryFn: () => getUpcomingTask().then((r) => r.data),
-    refetchInterval: 60000,
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 60000)
+    return () => clearInterval(id)
+  }, [])
+
+  const { data: allTasks = [] } = useQuery({
+    queryKey: ['allTasks', user?.id],
+    queryFn: () => getAllTasks(user.id).then(r => r.data),
+    enabled: !!user?.id,
   })
 
-  const { data: todayTasks = [], isLoading: loadingToday } = useQuery({
-    queryKey: ['tasksByDate', selectedDate],
-    queryFn: () =>
-      getTasksByDate(selectedDate)
-        .then((r) => r.data)
-        .catch(() => []),
-  })
-
-  const { data: next7 = [] } = useQuery({
-    queryKey: ['next7Days'],
-    queryFn: () => getTasksForNext7Days().then((r) => r.data),
-  })
-
-  const invalidate = () => {
+  const invalidate = useCallback(() => {
+    qc.invalidateQueries({ queryKey: ['allTasks'] })
     qc.invalidateQueries({ queryKey: ['tasksByDate'] })
-    qc.invalidateQueries({ queryKey: ['next7Days'] })
     qc.invalidateQueries({ queryKey: ['upcomingTask'] })
-  }
+    qc.invalidateQueries({ queryKey: ['next7Days'] })
+  }, [qc])
 
-  const createMutation = useMutation({
-    mutationFn: ({ data, repeated }) =>
-      repeated ? createRepeatedTask(data) : createTask(data),
-    onSuccess: invalidate,
-  })
+  const createMut = useMutation({ mutationFn: createTask, onSuccess: invalidate })
+  const editMut = useMutation({ mutationFn: editTask, onSuccess: invalidate })
+  const deleteMut = useMutation({ mutationFn: deleteTask, onSuccess: invalidate })
 
-  const deleteMutation = useMutation({
-    mutationFn: deleteTask,
-    onSuccess: invalidate,
-  })
+  // Week days (Mon–Sun of current week)
+  const weekDays = useMemo(() => {
+    const start = startOfWeek(new Date(), { weekStartsOn: 1 })
+    return Array.from({ length: 7 }, (_, i) => format(addDays(start, i), 'yyyy-MM-dd'))
+  }, [])
 
-  const editMutation = useMutation({
-    mutationFn: editTask,
-    onSuccess: invalidate,
-  })
+  const tasksByDay = useMemo(() => {
+    const map = Object.fromEntries(weekDays.map(d => [d, []]))
+    allTasks.forEach(t => { if (map[t.dateOfStart] !== undefined) map[t.dateOfStart].push(t) })
+    return map
+  }, [allTasks, weekDays])
 
-  const handleCreate = async (data) => {
-    const payload = {
+  const selectedTasks = useMemo(() => allTasks.filter(t => t.dateOfStart === selectedDate), [allTasks, selectedDate])
+  const scheduledTasks = useMemo(() =>
+    selectedTasks.filter(t => !isAnytime(t)).sort((a, b) => a.timeOfStart.localeCompare(b.timeOfStart)),
+    [selectedTasks])
+  const anytimeTasks = useMemo(() => selectedTasks.filter(isAnytime), [selectedTasks])
+
+  const todayTasks = useMemo(() => allTasks.filter(t => t.dateOfStart === todayStr), [allTasks, todayStr])
+  const todayDone = todayTasks.filter(t => t.status === 'done').length
+
+  const upNextTask = useMemo(() => {
+    const nowMin = now.getHours() * 60 + now.getMinutes()
+    return allTasks
+      .filter(t => t.dateOfStart === todayStr && t.status !== 'done' && t.timeOfEnd && !isAnytime(t))
+      .filter(t => timeToMin(t.timeOfEnd) > nowMin)
+      .sort((a, b) => (a.timeOfStart || '').localeCompare(b.timeOfStart || ''))[0] ?? null
+  }, [allTasks, todayStr, now])
+
+  const upNextCountdown = useMemo(() => {
+    if (!upNextTask) return null
+    const nowMin = now.getHours() * 60 + now.getMinutes()
+    const sMin = timeToMin(upNextTask.timeOfStart)
+    const eMin = timeToMin(upNextTask.timeOfEnd)
+    if (sMin != null && nowMin >= sMin && nowMin < eMin) {
+      const rem = eMin - nowMin
+      return { label: 'HAPPENING NOW', pill: `ends in ${rem}m`, running: true }
+    }
+    const diff = sMin - nowMin
+    if (diff <= 0) return null
+    const pill = diff < 60 ? `in ${diff}m` : diff % 60 ? `in ${Math.floor(diff / 60)}h ${diff % 60}m` : `in ${diff / 60}h`
+    return { label: 'UP NEXT', pill, running: false }
+  }, [upNextTask, now])
+
+  const streak = useMemo(() => calcStreak(allTasks), [allTasks])
+
+  const summaryLine = useMemo(() => {
+    if (!todayTasks.length) return 'Nothing planned for today'
+    const rem = todayTasks.filter(t => t.status !== 'done').length
+    return rem === 0 ? 'Everything for today is done' : `${rem} of ${todayTasks.length} tasks left today`
+  }, [todayTasks])
+
+  const handleToggle = useCallback(async (task) => {
+    await editMut.mutateAsync({
+      taskId: task.id,
+      name: task.name,
+      description: task.description || '',
+      dateOfStart: task.dateOfStart,
+      timeOfStart: task.timeOfStart,
+      dateOfEnd: task.dateOfEnd,
+      timeOfEnd: task.timeOfEnd,
+      status: task.status === 'done' ? 'pending' : 'done',
+    })
+  }, [editMut])
+
+  const handleQuickAdd = useCallback(async () => {
+    const trimmed = quickAdd.trim()
+    if (!trimmed) return
+    const { title, start, end } = parseQuickAdd(trimmed)
+    if (!title) return
+    const h = now.getHours()
+    const ds = `${String(h).padStart(2, '0')}:00`
+    const de = `${String((h + 1) % 24).padStart(2, '0')}:00`
+    await createMut.mutateAsync({
+      name: title,
+      description: '',
+      dateOfStart: selectedDate,
+      timeOfStart: start || ds,
+      dateOfEnd: selectedDate,
+      timeOfEnd: end || de,
+      status: 'pending',
+    })
+    setQuickAdd('')
+  }, [quickAdd, selectedDate, now, createMut])
+
+  const handleCreate = useCallback(async (data) => {
+    await createMut.mutateAsync({
       name: data.name,
       description: '',
       dateOfStart: data.dateOfStart || data.date,
@@ -73,12 +522,15 @@ export default function DashboardPage() {
       dateOfEnd: data.dateOfEnd || data.date,
       timeOfEnd: data.timeOfEnd,
       status: 'pending',
-    }
-    await createMutation.mutateAsync({ data: payload, repeated: data.repeated })
-  }
+    })
+    setModalOpen(false)
+    setModalDefaults(null)
+    setQuickAdd('')
+  }, [createMut])
 
-  const handleEdit = async (data) => {
-    await editMutation.mutateAsync({
+  const handleEdit = useCallback(async (data) => {
+    if (!editingTask) return
+    await editMut.mutateAsync({
       taskId: editingTask.id,
       name: data.name,
       description: editingTask.description || '',
@@ -89,144 +541,182 @@ export default function DashboardPage() {
       status: editingTask.status,
     })
     setEditingTask(null)
-  }
+  }, [editingTask, editMut])
 
-  const openEdit = (task) => {
-    setEditingTask(task)
-  }
-
-  const greeting = () => {
-    const h = new Date().getHours()
-    if (h < 12) return 'Good morning'
-    if (h < 17) return 'Good afternoon'
-    return 'Good evening'
-  }
-
-  const groupedNext7 = next7.reduce((acc, task) => {
-    const d = task.dateOfStart
-    if (!acc[d]) acc[d] = []
-    acc[d].push(task)
-    return acc
-  }, {})
+  const selectedIsToday = selectedDate === todayStr
+  const selectedLabel = selectedIsToday ? "Today's tasks" : format(parseISO(selectedDate), 'EEEE, MMM d')
+  const selectedDone = selectedTasks.filter(t => t.status === 'done').length
+  const qaPlaceholder = `Add a task to ${selectedIsToday ? 'today' : format(parseISO(selectedDate), 'EEEE')}, e.g. Training 19:00`
 
   return (
-    <div className="max-w-4xl mx-auto p-8">
-      <div className="mb-8">
-        <h1 className="text-2xl font-semibold text-[#f1f1f5]">
-          {greeting()}, {user?.firstname} 👋
-        </h1>
-        <p className="text-[#6b7280] text-sm mt-1">{format(new Date(), 'EEEE, MMMM d')}</p>
-      </div>
+    <>
+      <style>{`
+        @media (max-width: 1079px) { .dash-grid { grid-template-columns: 1fr !important; } }
+      `}</style>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-        <div className="lg:col-span-2 bg-[#1a1a24] border border-[#2a2a3a] rounded-2xl p-5">
-          <div className="flex items-center gap-2 mb-1">
-            <Zap size={16} className="text-indigo-400" />
-            <span className="text-xs font-medium text-[#6b7280] uppercase tracking-wider">Upcoming</span>
-          </div>
-          {upcoming ? (
-            <>
-              <p className="text-lg font-semibold text-[#f1f1f5] mt-2">{upcoming.name}</p>
-              <p className="text-sm text-[#6b7280] mt-0.5">{upcoming.description}</p>
-              <div className="flex items-center gap-1.5 mt-3 text-sm text-indigo-400">
-                <Clock size={14} />
-                <span>{upcoming.timeOfStart?.substring(0, 5)} — {upcoming.timeOfEnd?.substring(0, 5)}</span>
-              </div>
-            </>
-          ) : (
-            <p className="text-sm text-[#6b7280] mt-3">No upcoming tasks for today.</p>
-          )}
-        </div>
+      <div style={{ minHeight: '100vh', padding: '28px 32px 40px', overflowX: 'hidden' }}>
+        <div style={{ maxWidth: 1240, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 22 }}>
 
-        <div className="bg-[#1a1a24] border border-[#2a2a3a] rounded-2xl p-5">
-          <div className="flex items-center gap-2 mb-3">
-            <CalendarDays size={16} className="text-indigo-400" />
-            <span className="text-xs font-medium text-[#6b7280] uppercase tracking-wider">This week</span>
-          </div>
-          <p className="text-3xl font-bold text-[#f1f1f5]">{next7.length}</p>
-          <p className="text-sm text-[#6b7280] mt-0.5">tasks in the next 7 days</p>
-        </div>
-      </div>
-
-      <div className="mb-8">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <h2 className="text-base font-semibold text-[#f1f1f5]">Tasks</h2>
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="bg-[#1a1a24] border border-[#2a2a3a] rounded-lg px-2.5 py-1.5 text-xs text-[#9ca3af] outline-none focus:border-indigo-500 transition-colors"
-            />
-          </div>
-          <button
-            onClick={() => setModalOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-sm font-medium text-white rounded-lg transition-colors"
-          >
-            <Plus size={16} />
-            Add task
-          </button>
-        </div>
-
-        {loadingToday ? (
-          <div className="flex flex-col gap-2">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="h-20 bg-[#1a1a24] border border-[#2a2a3a] rounded-xl animate-pulse" />
-            ))}
-          </div>
-        ) : todayTasks.length === 0 ? (
-          <div className="text-center py-12 bg-[#1a1a24] border border-[#2a2a3a] border-dashed rounded-2xl">
-            <p className="text-[#6b7280] text-sm">No tasks for this day.</p>
-            <button onClick={() => setModalOpen(true)} className="mt-2 text-indigo-400 text-sm hover:text-indigo-300 transition-colors">
-              Add one +
+          {/* 1. Header */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+            <div>
+              <p style={{ fontSize: 12, color: '#7A7A8E', margin: '0 0 4px' }}>
+                {format(new Date(), 'EEEE, MMMM d')}
+              </p>
+              <h1 style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-0.025em', color: '#ECECF1', margin: '0 0 5px' }}>
+                {getGreeting(user?.firstname)}
+              </h1>
+              <p style={{ fontSize: 13.5, color: '#8B8B9E', margin: 0 }}>{summaryLine}</p>
+            </div>
+            <button
+              onClick={() => navigate('/calendar')}
+              aria-label="Open calendar"
+              style={{
+                display: 'flex', alignItems: 'center', gap: 7, alignSelf: 'flex-start',
+                height: 38, padding: '0 14px', borderRadius: 10,
+                background: '#13131A', border: '1px solid #23232F',
+                color: '#8B8B9E', fontSize: 13, fontWeight: 500,
+                cursor: 'pointer', fontFamily: 'inherit',
+                transition: 'border-color 0.15s, color 0.15s',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = '#6461F5'; e.currentTarget.style.color = '#ECECF1' }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = '#23232F'; e.currentTarget.style.color = '#8B8B9E' }}
+            >
+              <CalendarDays size={14} />
+              Open calendar
             </button>
           </div>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {todayTasks.map((task) => (
-              <TaskCard
-                key={task.id}
-                task={task}
-                onDelete={(id) => deleteMutation.mutate(id)}
-                onEdit={openEdit}
+
+          {/* 2. Quick add bar */}
+          <div style={{
+            height: 52, borderRadius: 14,
+            background: '#111118', border: `1px solid ${qaFocused ? '#6461F5' : '#1E1E29'}`,
+            display: 'flex', alignItems: 'center', gap: 12, padding: '0 14px 0 16px',
+            transition: 'border-color 0.15s',
+          }}>
+            <Plus size={18} color="#7C7AFF" strokeWidth={2.5} style={{ flexShrink: 0 }} />
+            <input
+              value={quickAdd}
+              onChange={e => setQuickAdd(e.target.value)}
+              onFocus={() => setQaFocused(true)}
+              onBlur={() => setQaFocused(false)}
+              onKeyDown={e => { if (e.key === 'Enter') handleQuickAdd() }}
+              placeholder={qaPlaceholder}
+              aria-label="Quick add task"
+              style={{
+                flex: 1, background: 'transparent', border: 'none', outline: 'none',
+                color: '#ECECF1', fontSize: 14.5, fontFamily: 'inherit', minWidth: 0,
+              }}
+            />
+            <span style={{
+              fontSize: 11, color: '#5C5C70', border: '1px solid #2A2A3A',
+              borderRadius: 5, padding: '2px 6px', fontFamily: 'Geist Mono, monospace',
+              flexShrink: 0, whiteSpace: 'nowrap',
+            }}>Enter</span>
+            <button
+              onClick={() => {
+                const name = quickAdd.trim()
+                const h = now.getHours()
+                setModalDefaults({
+                  name,
+                  date: selectedDate,
+                  timeOfStart: `${String(h).padStart(2, '0')}:00`,
+                  timeOfEnd: `${String((h + 1) % 24).padStart(2, '0')}:00`,
+                })
+                setModalOpen(true)
+              }}
+              aria-label="More options"
+              title="Set time, label & more"
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                width: 34, height: 34, borderRadius: 8, flexShrink: 0,
+                background: 'transparent', border: '1px solid #2A2A3A',
+                color: '#6F6F82', cursor: 'pointer',
+                transition: 'border-color 0.15s, color 0.15s, background 0.15s',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = '#6461F5'; e.currentTarget.style.color = '#A5A3FF'; e.currentTarget.style.background = '#1A1A2E' }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = '#2A2A3A'; e.currentTarget.style.color = '#6F6F82'; e.currentTarget.style.background = 'transparent' }}
+            >
+              <SlidersHorizontal size={14} />
+            </button>
+            <button
+              onClick={handleQuickAdd}
+              disabled={!quickAdd.trim()}
+              aria-label="Add task"
+              style={{
+                height: 34, padding: '0 14px', borderRadius: 8, flexShrink: 0,
+                background: '#6461F5', border: 'none', boxShadow: 'inset 0 0 0 1px #7B78FF',
+                color: '#fff', fontSize: 13.5, fontWeight: 600,
+                cursor: quickAdd.trim() ? 'pointer' : 'not-allowed',
+                opacity: quickAdd.trim() ? 1 : 0.5,
+                fontFamily: 'inherit', transition: 'opacity 0.15s, background 0.15s',
+              }}
+              onMouseEnter={e => { if (quickAdd.trim()) e.currentTarget.style.background = '#7270FF' }}
+              onMouseLeave={e => e.currentTarget.style.background = '#6461F5'}
+            >
+              Add task
+            </button>
+          </div>
+
+          {/* 3. Week strip */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 8 }}>
+            {weekDays.map(d => (
+              <DayCard
+                key={d}
+                date={d}
+                tasks={tasksByDay[d] || []}
+                selected={selectedDate === d}
+                onClick={() => setSelectedDate(d)}
               />
             ))}
           </div>
-        )}
-      </div>
 
-      {Object.keys(groupedNext7).length > 0 && (
-        <div>
-          <h2 className="text-base font-semibold text-[#f1f1f5] mb-4">Next 7 days</h2>
-          <div className="flex flex-col gap-4">
-            {Object.entries(groupedNext7).sort(([a], [b]) => a.localeCompare(b)).map(([date, tasks]) => (
-              <div key={date}>
-                <p className="text-xs text-[#6b7280] mb-2 font-medium">
-                  {format(parseISO(date), 'EEEE, MMM d')}
-                </p>
-                <div className="flex flex-col gap-2">
-                  {tasks.map((task) => (
-                    <TaskCard
-                      key={task.id}
-                      task={task}
-                      onDelete={(id) => deleteMutation.mutate(id)}
-                      onEdit={openEdit}
-                    />
-                  ))}
-                </div>
-              </div>
-            ))}
+          {/* 4. Content grid */}
+          <div
+            className="dash-grid"
+            style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.6fr) minmax(300px, 1fr)', gap: 16 }}
+          >
+            {/* Left column */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+              {upNextTask && upNextCountdown && (
+                <UpNextCard
+                  task={upNextTask}
+                  countdown={upNextCountdown}
+                  color={getTaskColor(upNextTask.id)}
+                  onMarkDone={() => handleToggle(upNextTask)}
+                />
+              )}
+              <TaskListCard
+                title={selectedLabel}
+                done={selectedDone}
+                total={selectedTasks.length}
+                scheduled={scheduledTasks}
+                anytime={anytimeTasks}
+                onToggle={handleToggle}
+                onDelete={id => deleteMut.mutate(id)}
+              />
+            </div>
+
+            {/* Right column */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+              <ProgressCard done={todayDone} total={todayTasks.length} streak={streak} />
+              <ScheduleCard
+                tasks={todayTasks.filter(t => !isAnytime(t))}
+                now={now}
+              />
+            </div>
           </div>
+
         </div>
-      )}
+      </div>
 
       <TaskModal
         open={modalOpen}
-        onClose={() => setModalOpen(false)}
+        onClose={() => { setModalOpen(false); setModalDefaults(null) }}
         onSubmit={handleCreate}
         modalTitle="New task"
+        defaultValues={modalDefaults}
       />
-
       <TaskModal
         open={!!editingTask}
         onClose={() => setEditingTask(null)}
@@ -240,6 +730,6 @@ export default function DashboardPage() {
           status: editingTask.status,
         } : null}
       />
-    </div>
+    </>
   )
 }

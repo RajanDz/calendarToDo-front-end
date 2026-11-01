@@ -108,7 +108,7 @@ export default function TaskModal({ open, onClose, onSubmit, defaultValues, moda
 
   if (!open) return null
 
-  const isEdit = !!defaultValues?.name
+  const isEdit = modalTitle === 'Edit task'
 
   const submit = async (data) => {
     const date = data.date
