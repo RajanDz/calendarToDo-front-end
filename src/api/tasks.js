@@ -29,3 +29,8 @@ export const deleteTask = (taskId) =>
 
 export const editTask = (dto) =>
   api.post('/api/editTaskDetails', dto)
+
+export const editUserDetails = (formData) =>
+  api.patch('/api/editUserDetails', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })

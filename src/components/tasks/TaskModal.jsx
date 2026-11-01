@@ -133,14 +133,17 @@ export default function TaskModal({ open, onClose, onSubmit, defaultValues, moda
 
   const cardStyle = isMobile
     ? {
-        position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 201,
+        position: 'fixed',
+        bottom: 'calc(60px + env(safe-area-inset-bottom, 0px))',
+        left: 0, right: 0, zIndex: 201,
         background: '#14141C',
         borderRadius: '18px 18px 0 0',
         border: '1px solid #262633',
         borderBottom: 'none',
         boxShadow: '0 -8px 40px rgba(0,0,0,0.6)',
-        padding: '0 20px 0',
-        paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+        padding: '0 20px 16px',
+        maxHeight: 'calc(92vh - 60px)',
+        overflowY: 'auto',
       }
     : S.card
 
@@ -166,7 +169,7 @@ export default function TaskModal({ open, onClose, onSubmit, defaultValues, moda
           </button>
         </div>
 
-        <form onSubmit={handleSubmit(submit)} style={{ paddingBottom: isMobile ? 16 : 0 }}>
+        <form onSubmit={handleSubmit(submit)} style={{ paddingBottom: isMobile ? 24 : 0 }}>
           {/* Task name */}
           <div style={{ marginBottom: 16 }}>
             <label style={S.label}>Task name</label>
@@ -181,27 +184,29 @@ export default function TaskModal({ open, onClose, onSubmit, defaultValues, moda
           </div>
 
           {/* Date / Start / End */}
-          <div style={S.row}>
-            <div>
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 10 }}>
               <label style={S.label}>Date</label>
               <input type="date" {...register('date', { required: true })} style={S.smallInput}
                 onFocus={e => e.currentTarget.style.borderColor = '#6461F5'}
                 onBlur={e => e.currentTarget.style.borderColor = '#262633'}
               />
             </div>
-            <div>
-              <label style={S.label}>Start</label>
-              <input type="time" {...register('timeOfStart', { required: true })} style={S.smallInput}
-                onFocus={e => e.currentTarget.style.borderColor = '#6461F5'}
-                onBlur={e => e.currentTarget.style.borderColor = '#262633'}
-              />
-            </div>
-            <div>
-              <label style={S.label}>End</label>
-              <input type="time" {...register('timeOfEnd', { required: true })} style={S.smallInput}
-                onFocus={e => e.currentTarget.style.borderColor = '#6461F5'}
-                onBlur={e => e.currentTarget.style.borderColor = '#262633'}
-              />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div>
+                <label style={S.label}>Start</label>
+                <input type="time" {...register('timeOfStart', { required: true })} style={S.smallInput}
+                  onFocus={e => e.currentTarget.style.borderColor = '#6461F5'}
+                  onBlur={e => e.currentTarget.style.borderColor = '#262633'}
+                />
+              </div>
+              <div>
+                <label style={S.label}>End</label>
+                <input type="time" {...register('timeOfEnd', { required: true })} style={S.smallInput}
+                  onFocus={e => e.currentTarget.style.borderColor = '#6461F5'}
+                  onBlur={e => e.currentTarget.style.borderColor = '#262633'}
+                />
+              </div>
             </div>
           </div>
 
@@ -243,7 +248,15 @@ export default function TaskModal({ open, onClose, onSubmit, defaultValues, moda
           )}
 
           {/* Actions */}
-          <div style={{ display: 'flex', gap: 10 }}>
+          <div style={{
+            display: 'flex', gap: 10,
+            position: isMobile ? 'sticky' : 'static', bottom: 0,
+            background: isMobile ? '#14141C' : 'transparent',
+            paddingTop: isMobile ? 10 : 0,
+            paddingBottom: isMobile ? 8 : 0,
+            marginLeft: isMobile ? -20 : 0, marginRight: isMobile ? -20 : 0,
+            paddingLeft: isMobile ? 20 : 0, paddingRight: isMobile ? 20 : 0,
+          }}>
             <button type="button" style={S.cancelBtn} onClick={onClose}
               onMouseEnter={e => e.currentTarget.style.background = '#16161F'}
               onMouseLeave={e => e.currentTarget.style.background = 'transparent'}

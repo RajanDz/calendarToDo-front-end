@@ -15,7 +15,7 @@ export default function BottomNav() {
       background: '#0C0C11',
       borderTop: '1px solid #1C1C26',
       display: 'flex',
-      zIndex: 50,
+      zIndex: 300,
       paddingBottom: 'env(safe-area-inset-bottom, 0px)',
     }}>
       {TABS.map(({ to, icon: Icon, label }) => (

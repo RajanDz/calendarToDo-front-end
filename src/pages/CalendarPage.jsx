@@ -435,56 +435,41 @@ function TimeGrid({ days, events, onSlotClick, onEventClick, onDeleteEvent, onDa
   const gridMinW        = mobileWeek ? GUTTER_W + days.length * 120 : undefined
   const effectiveMaxCols = mobileWeek ? 2 : MAX_COLS
 
-  return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {/* Single scroll container — headers are sticky inside so they scroll horizontally
-          with the grid body but stay pinned at the top during vertical scroll */}
-      <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', overflowX: mobileWeek ? 'auto' : 'hidden' }}>
+  const headerRow = (
+    <div style={{
+      display: 'grid', gridTemplateColumns: colTemplate,
+      borderBottom: '1px solid #1A1A24', flexShrink: 0,
+      ...(mobileWeek ? { minWidth: gridMinW, position: 'sticky', top: 0, zIndex: 10, background: '#111118' } : {}),
+    }}>
+      <div />
+      {days.map(day => {
+        const isTdy  = isToday(day)
+        const dayStr = format(day, 'yyyy-MM-dd')
+        return (
+          <div
+            key={dayStr}
+            onClick={() => isWeek && onOpenDayPopup(format(day, 'yyyy-MM-dd'))}
+            style={{ padding: '10px 0', textAlign: 'center', borderLeft: '1px solid #1A1A24', cursor: isWeek ? 'pointer' : 'default' }}
+          >
+            <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: '0.06em', color: '#5C5C70', textTransform: 'uppercase', marginBottom: 4 }}>
+              {format(day, 'EEE')}
+            </div>
+            <div style={{ width: 28, height: 28, borderRadius: 6, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'center', background: isTdy ? '#6461F5' : 'transparent', color: isTdy ? '#fff' : '#ECECF1', fontSize: 14, fontWeight: 600 }}>
+              {format(day, 'd')}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
 
-        {/* Sticky column headers */}
-        <div style={{
-          display: 'grid', gridTemplateColumns: colTemplate, minWidth: gridMinW,
-          borderBottom: '1px solid #1A1A24',
-          position: 'sticky', top: 0, zIndex: 10, background: '#111118',
-        }}>
-          <div />
-          {days.map(day => {
-            const isTdy  = isToday(day)
-            const dayStr = format(day, 'yyyy-MM-dd')
-            return (
-              <div
-                key={dayStr}
-                onClick={() => isWeek && onOpenDayPopup(format(day, 'yyyy-MM-dd'))}
-                style={{
-                  padding: '10px 0', textAlign: 'center',
-                  borderLeft: '1px solid #1A1A24',
-                  cursor: isWeek ? 'pointer' : 'default',
-                }}
-              >
-                <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: '0.06em', color: '#5C5C70', textTransform: 'uppercase', marginBottom: 4 }}>
-                  {format(day, 'EEE')}
-                </div>
-                <div style={{
-                  width: 28, height: 28, borderRadius: 6, margin: '0 auto',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  background: isTdy ? '#6461F5' : 'transparent',
-                  color: isTdy ? '#fff' : '#ECECF1',
-                  fontSize: 14, fontWeight: 600,
-                }}>
-                  {format(day, 'd')}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-
-        {/* Grid body */}
-        <div style={{
-          height: 24 * ROW_H,
-          display: 'grid',
-          gridTemplateColumns: colTemplate,
-          minWidth: gridMinW,
-        }}>
+  const gridBody = (
+    <div style={{
+      height: 24 * ROW_H,
+      display: 'grid',
+      gridTemplateColumns: colTemplate,
+      minWidth: gridMinW,
+    }}>
           {/* Hour labels */}
           <div style={{ position: 'relative', borderRight: '1px solid #1A1A24' }}>
             {hours.map(h => (
@@ -555,7 +540,27 @@ function TimeGrid({ days, events, onSlotClick, onEventClick, onDeleteEvent, onDa
               </div>
             )
           })}
+    </div>
+  )
+
+  // Mobile week: headers sticky inside the single scroll container so horizontal scroll stays in sync
+  if (mobileWeek) {
+    return (
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', overflowX: 'auto' }}>
+          {headerRow}
+          {gridBody}
         </div>
+      </div>
+    )
+  }
+
+  // Desktop / mobile day: headers outside the scroll container (original structure)
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {headerRow}
+      <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+        {gridBody}
       </div>
     </div>
   )
@@ -582,8 +587,6 @@ function mwLayout(dayEvts) {
     if (lane === -1) { lane = railEnds.length; railEnds.push(e) } else railEnds[lane] = e
     return { ...ev, _lane: lane, _s: s, _e: e }
   })
-  const railLaneCount = longPositioned.length ? Math.max(...longPositioned.map(e => e._lane)) + 1 : 0
-
   // Greedy lane assignment for short tasks (independent of rails)
   const sorted = [...short].sort((a, b) => {
     const as = parseMin(a.start), bs = parseMin(b.start)
@@ -602,7 +605,7 @@ function mwLayout(dayEvts) {
     return { ...ev, _total: Math.max(...concurrent.map(o => o._lane)) + 1 }
   })
 
-  return { long: longPositioned, short: withTotal, railLaneCount }
+  return { long: longPositioned, short: withTotal }
 }
 
 function mwOverflowChips(shortTasks) {
@@ -615,20 +618,26 @@ function mwOverflowChips(shortTasks) {
     if (used.has(ev.id)) continue
     const group = sorted.filter(o => !used.has(o.id) && o._s < ev._e && o._e > ev._s)
     group.forEach(o => used.add(o.id))
-    chips.push({ count: group.length, startMin: Math.min(...group.map(o => o._s)) })
+    chips.push({ count: group.length, startMin: Math.min(...group.map(o => o._s)), endMin: Math.max(...group.map(o => o._e)) })
   }
   return chips
 }
 
-function MobileWeekView({ currentDate, selectedDate, onSelectDate, onWeekChange, events, onEventClick, onSlotClick }) {
+function MobileWeekView({ currentDate, selectedDate, onSelectDate, onWeekChange, events, onEventClick, onSlotClick, onOpenDayPopup }) {
   const weekDays  = getWeekDays(currentDate)
   const scrollRef = useRef(null)
   const touchX    = useRef(null)
 
   const dayStr  = format(selectedDate, 'yyyy-MM-dd')
   const dayEvts = events.filter(e => e.date === dayStr)
-  const { long: longTasks, short: shortTasks, railLaneCount } = useMemo(() => mwLayout(dayEvts), [dayEvts])
+  const { long: longTasks, short: shortTasks } = useMemo(() => mwLayout(dayEvts), [dayEvts])
   const chips = useMemo(() => mwOverflowChips(shortTasks), [shortTasks])
+
+  // Offset for tasks/chips at [s,e): only rails that actually overlap shift them right
+  const railOffset = (s, e) => {
+    const overlapping = longTasks.filter(r => r._s < e && r._e > s)
+    return overlapping.length ? 4 + (Math.max(...overlapping.map(r => r._lane)) + 1) * 26 : 4
+  }
 
   useEffect(() => {
     if (!scrollRef.current) return
@@ -636,8 +645,7 @@ function MobileWeekView({ currentDate, selectedDate, onSelectDate, onWeekChange,
     scrollRef.current.scrollTop = Math.max(0, (first / 60) * MW_ROW_H - MW_ROW_H)
   }, [dayStr])
 
-  const hours    = Array.from({ length: 24 }, (_, i) => i)
-  const taskLeft = 4 + railLaneCount * 26
+  const hours = Array.from({ length: 24 }, (_, i) => i)
 
   const goDay = (delta) => {
     const next  = addDays(selectedDate, delta)
@@ -749,8 +757,9 @@ function MobileWeekView({ currentDate, selectedDate, onSelectDate, onWeekChange,
                   const total = Math.min(ev._total, 3)
                   const top   = (ev._s / 60) * MW_ROW_H + 1
                   const ht    = Math.max(((ev._e - ev._s) / 60) * MW_ROW_H - 2, 30)
-                  const avail = `(100% - ${taskLeft + 4}px)`
-                  const lCSS  = `calc(${taskLeft}px + ${avail} * ${ev._lane / total} + 1px)`
+                  const off   = railOffset(ev._s, ev._e)
+                  const avail = `(100% - ${off + 4}px)`
+                  const lCSS  = `calc(${off}px + ${avail} * ${ev._lane / total} + 1px)`
                   const rCSS  = `calc(${avail} * ${(total - ev._lane - 1) / total} + 4px + 1px)`
                   return (
                     <div key={ev.id} onClick={ev2 => { ev2.stopPropagation(); onEventClick(ev) }} style={{ position: 'absolute', top, left: lCSS, right: rCSS, height: ht, background: c.bg, border: `1px solid ${c.border}`, borderRadius: 7, padding: '3px 7px', cursor: 'pointer', opacity: ev.done ? 0.45 : 1, overflow: 'hidden' }}>
@@ -762,11 +771,12 @@ function MobileWeekView({ currentDate, selectedDate, onSelectDate, onWeekChange,
 
                 {/* +N overflow chips */}
                 {chips.map((chip, i) => {
-                  const avail = `(100% - ${taskLeft + 4}px)`
-                  const lCSS  = `calc(${taskLeft}px + ${avail} * ${2 / 3} + 1px)`
-                  const rCSS  = `calc(${avail} * ${0 / 3} + 4px + 1px)`
+                  const off   = railOffset(chip.startMin, chip.endMin)
+                  const avail = `(100% - ${off + 4}px)`
+                  const lCSS  = `calc(${off}px + ${avail} * ${2 / 3} + 1px)`
+                  const rCSS  = `calc(4px + 1px)`
                   return (
-                    <div key={i} style={{ position: 'absolute', top: (chip.startMin / 60) * MW_ROW_H + 1, left: lCSS, right: rCSS, height: 28, background: '#16161F', border: '1px dashed #34324F', borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 600, color: '#A5A3FF', cursor: 'pointer', zIndex: 2 }}>
+                    <div key={i} onClick={e => { e.stopPropagation(); onOpenDayPopup(dayStr) }} style={{ position: 'absolute', top: (chip.startMin / 60) * MW_ROW_H + 1, left: lCSS, right: rCSS, height: 28, background: '#16161F', border: '1px dashed #34324F', borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 600, color: '#A5A3FF', cursor: 'pointer', zIndex: 2 }}>
                       +{chip.count}
                     </div>
                   )
@@ -1309,7 +1319,7 @@ export default function CalendarPage() {
             <button onClick={goToday} style={{ ...navBtn, flexShrink: 0 }}>Today</button>
             <div style={{ flex: 1 }} />
             <button
-              onClick={() => openAddModal()}
+              onClick={() => openAddModal({ date: format(selectedDate, 'yyyy-MM-dd') })}
               style={{
                 height: 34, width: 34, borderRadius: 10, border: 'none',
                 background: '#6461F5',
@@ -1362,7 +1372,7 @@ export default function CalendarPage() {
               </button>
             ))}
           </div>
-          <button onClick={() => openAddModal()} style={{
+          <button onClick={() => openAddModal({ date: format(selectedDate, 'yyyy-MM-dd') })} style={{
             height: 38, padding: '0 16px', borderRadius: 10, border: 'none',
             background: '#6461F5',
             boxShadow: 'inset 0 0 0 1px #7B78FF, 0 0 16px rgba(100,97,245,0.25)',
@@ -1392,6 +1402,7 @@ export default function CalendarPage() {
             events={events}
             onEventClick={handleEventClick}
             onSlotClick={handleSlotClick}
+            onOpenDayPopup={setPopupDay}
           />
         ) : (
           <>

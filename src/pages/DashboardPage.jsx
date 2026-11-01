@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { format, isToday, parseISO, startOfWeek, addDays } from 'date-fns'
 import { useNavigate } from 'react-router-dom'
@@ -423,6 +423,7 @@ export default function DashboardPage() {
 
   const todayStr = format(new Date(), 'yyyy-MM-dd')
   const [selectedDate, setSelectedDate] = useState(todayStr)
+  const weekStripRef = useRef(null)
   const [quickAdd, setQuickAdd] = useState('')
   const [qaFocused, setQaFocused] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
@@ -457,6 +458,15 @@ export default function DashboardPage() {
     const start = startOfWeek(new Date(), { weekStartsOn: 1 })
     return Array.from({ length: 7 }, (_, i) => format(addDays(start, i), 'yyyy-MM-dd'))
   }, [])
+
+  useEffect(() => {
+    if (!isMobile || !weekStripRef.current) return
+    const todayIdx = weekDays.indexOf(todayStr)
+    if (todayIdx < 0) return
+    const el = weekStripRef.current
+    const cardW = 76 + 8
+    el.scrollLeft = Math.max(0, todayIdx * cardW - el.clientWidth / 2 + 38)
+  }, [isMobile, weekDays, todayStr])
 
   const tasksByDay = useMemo(() => {
     const map = Object.fromEntries(weekDays.map(d => [d, []]))
@@ -718,7 +728,7 @@ export default function DashboardPage() {
 
           {/* 3. Week strip — horizontal scroll on mobile, 7-col grid on desktop */}
           {isMobile ? (
-            <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4, scrollbarWidth: 'none' }}>
+            <div ref={weekStripRef} style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4, scrollbarWidth: 'none' }}>
               {weekDays.map(d => (
                 <div key={d} style={{ minWidth: 76, flexShrink: 0 }}>
                   <DayCard
