@@ -114,23 +114,20 @@ function EditProfileModal({ open, onClose, user, currentAvatarUrl, onSaved }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if (!form.firstname.trim() || !form.username.trim()) {
-      setError('First name and username are required.')
-      return
-    }
     setSaving(true)
     setError('')
     try {
       const fd = new FormData()
-      fd.append('firstname', form.firstname.trim())
-      fd.append('lastname', form.lastname.trim())
-      fd.append('username', form.username.trim())
+      if (form.firstname.trim()) fd.append('firstname', form.firstname.trim())
+      if (form.lastname.trim()) fd.append('lastname', form.lastname.trim())
+      if (form.username.trim() && form.username.trim() !== user?.username)
+        fd.append('username', form.username.trim())
       if (file) fd.append('profilePicture', file)
       const res = await editUserDetails(fd)
       onSaved(res.data, file ? preview : undefined)
       onClose()
     } catch (err) {
-      setError(err?.response?.data?.message || 'Failed to save. Please try again.')
+      setError(err?.response?.data?.detail || err?.response?.data?.message || 'Failed to save. Please try again.')
     } finally {
       setSaving(false)
     }
@@ -138,13 +135,12 @@ function EditProfileModal({ open, onClose, user, currentAvatarUrl, onSaved }) {
 
   const cardStyle = isMobile
     ? {
-        position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 201,
+        position: 'fixed', bottom: 'calc(60px + env(safe-area-inset-bottom, 0px))', left: 0, right: 0, zIndex: 201,
         background: '#14141C', borderRadius: '18px 18px 0 0',
         border: '1px solid #262633', borderBottom: 'none',
         boxShadow: '0 -8px 40px rgba(0,0,0,0.6)',
         padding: '0 20px 0',
-        paddingBottom: 'env(safe-area-inset-bottom, 0px)',
-        maxHeight: '90vh', overflowY: 'auto',
+        maxHeight: 'calc(92vh - 60px)', overflowY: 'auto',
       }
     : {
         position: 'relative',
@@ -226,7 +222,7 @@ function EditProfileModal({ open, onClose, user, currentAvatarUrl, onSaved }) {
           <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleFile} />
         </div>
 
-        <form onSubmit={handleSubmit} style={{ paddingBottom: isMobile ? 16 : 0 }}>
+        <form onSubmit={handleSubmit}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
             <div>
               <label style={{ display: 'block', fontSize: 11, color: '#6F6F82', marginBottom: 6 }}>First name</label>
@@ -270,7 +266,12 @@ function EditProfileModal({ open, onClose, user, currentAvatarUrl, onSaved }) {
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: 10 }}>
+          <div style={{
+            display: 'flex', gap: 10,
+            position: 'sticky', bottom: 0,
+            background: '#14141C',
+            paddingTop: 8, paddingBottom: 16,
+          }}>
             <button
               type="button"
               onClick={onClose}
@@ -282,12 +283,12 @@ function EditProfileModal({ open, onClose, user, currentAvatarUrl, onSaved }) {
             </button>
             <button
               type="submit"
-              disabled={saving || !form.firstname.trim() || !form.username.trim()}
+              disabled={saving}
               style={{
                 flex: 1, height: 40, borderRadius: 10, border: 'none',
                 background: '#6461F5', color: '#fff', fontSize: 14, fontWeight: 600,
                 cursor: saving ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
-                opacity: (saving || !form.firstname.trim() || !form.username.trim()) ? 0.5 : 1,
+                opacity: saving ? 0.5 : 1,
               }}
               onMouseEnter={e => { if (!saving) e.currentTarget.style.background = '#7270FF' }}
               onMouseLeave={e => e.currentTarget.style.background = '#6461F5'}
